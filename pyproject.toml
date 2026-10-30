@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "cosmicqc>=1.1.2",
     "cytotable>=1.2.6",
     "matplotlib>=3.11.2",
     "plotly>=7.1.0",
