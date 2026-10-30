@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# prototype or HPC specific files
+_*
+
+# ignore large files
+data/
