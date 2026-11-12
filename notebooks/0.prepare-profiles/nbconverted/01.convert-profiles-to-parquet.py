@@ -12,13 +12,14 @@
 # 
 # Missing values: every missing-value token (`nan`, `inf`, empty) becomes a parquet NULL.
 
-# In[ ]:
+# In[1]:
 
 
 import csv
 import gzip
 import json
 import pathlib
+import shutil
 
 import duckdb
 import polars as pl
@@ -29,20 +30,20 @@ import polars as pl
 # Match `memory_limit` and `n_threads` to the Berzelius allocation.
 # Reading a gzip file is single-threaded, so more threads mostly help the parquet writer.
 
-# In[ ]:
+# In[2]:
 
 
 # headless-cp-wf results: one folder per plate, each with a DONE file
-results_dir = pathlib.Path("../../../../results/PALS-screen-profiles").resolve(strict=True)
+cellprofiler_dir = pathlib.Path("../../data/sc-profiles/PALS-screen-profiles-v2").resolve(strict=True)
 
-# per-plate parquet files are written here
-out_dir = pathlib.Path("../../data/sc-profiles").resolve()
+# one parquet file per plate is written here
+out_dir = pathlib.Path("results/single-cell-profiles").resolve()
 out_dir.mkdir(parents=True, exist_ok=True)
 
 # DuckDB resources; data that does not fit in memory_limit spills to tmp_dir
 memory_limit = "64GB"
 n_threads = 8
-tmp_dir = out_dir / "duckdb_tmp"
+tmp_dir = pathlib.Path("tmp").resolve()
 
 # rows per parquet row group; ~4000 columns x 10k rows x 8 bytes = ~320 MB buffered per writer
 row_group_size = 10_000
@@ -61,11 +62,11 @@ overwrite = False
 # Each plate's `DONE` file holds the path of its workflow run. The run has the per-cell table
 # (`cp_features/all_plates.csv.gz`) and the MERGE report with the expected number of cells.
 
-# In[ ]:
+# In[3]:
 
 
 plates = {}
-for done_file in sorted(results_dir.glob("*/DONE")):
+for done_file in sorted(cellprofiler_dir.glob("*/DONE")):
     plate = done_file.parent.name
     run_dir = pathlib.Path(done_file.read_text().strip())
     plates[plate] = {
@@ -74,7 +75,7 @@ for done_file in sorted(results_dir.glob("*/DONE")):
     }
 
 if not plates:
-    raise FileNotFoundError(f"No plates with a DONE file in {results_dir}")
+    raise FileNotFoundError(f"No plates with a DONE file in {cellprofiler_dir}")
 
 for plate, paths in plates.items():
     print(f"{plate}: {paths['csv'].stat().st_size / 2**30:.1f} GiB")
@@ -91,7 +92,7 @@ for plate, paths in plates.items():
 # - integer: image and object indices, site and tile position
 # - double: every measurement
 
-# In[ ]:
+# In[4]:
 
 
 text_prefixes = ("Image_FileName_", "Image_PathName_", "Image_URL_", "Image_MD5Digest_")
@@ -136,7 +137,7 @@ print(pl.Series(list(schema.values())).value_counts(sort=True))
 # One streaming pass per plate. The parquet file is first written as `.partial` and renamed when
 # complete, so an interrupted run never leaves a file that looks finished.
 
-# In[ ]:
+# In[5]:
 
 
 def sql_list(values):
@@ -171,7 +172,7 @@ def convert_plate(csv_path, parquet_path):
     partial.rename(parquet_path)
 
 
-# In[ ]:
+# In[6]:
 
 
 out_dir.mkdir(parents=True, exist_ok=True)
@@ -186,6 +187,8 @@ for plate, paths in plates.items():
     convert_plate(paths["csv"], parquet_path)
     print(f"{plate}: wrote {parquet_path.stat().st_size / 2**30:.1f} GiB")
 
+shutil.rmtree(tmp_dir, ignore_errors=True)
+
 
 # ## Validate
 # 
@@ -195,7 +198,7 @@ for plate, paths in plates.items():
 # 
 # The null counts per column come from the parquet metadata (no scan) and are saved next to each file.
 
-# In[ ]:
+# In[7]:
 
 
 double_columns = [name for name, dtype in schema.items() if dtype == "DOUBLE"]
@@ -244,7 +247,7 @@ with duckdb.connect() as con:
             FROM parquet_metadata('{parquet_path}')
             GROUP BY path_in_schema
         """).pl().sort("n_null", descending=True)
-        null_counts.write_csv(out_dir / f"{plate}.null_counts.csv")
+        null_counts.write_csv(out_dir / f"{plate}_missing-values.csv")
 
         summary.append({
             "plate": plate,

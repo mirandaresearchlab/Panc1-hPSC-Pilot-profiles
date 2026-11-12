@@ -1,51 +1,34 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# # sc-profiles QC check
+# # Dataset QC report: are the CellProfiler outlines good enough?
 # 
-# **Question:** are the single-cell profiles good enough to use, or do we need to change the CellProfiler settings and run it again?
+# This report checks the whole dataset at once: the cell outlines, the features and the biological signal. Each check gets a grade, and the scorecard in section 10 collects them. Notebook 02 (`02.qc.ipynb`) then checks each image and each cell, and marks the ones to remove.
 # 
-# **Answer: yes, we need to change the CellProfiler settings and run it again.**
+# **Question:** are the CellProfiler outlines good enough to use these single-cell profiles, or should we run CellProfiler again with other settings?
 # 
-# The images are good. The problem is segmentation in both cell lines (CL1 and CL2):
+# **Answer: the outlines are good enough, so we keep these profiles. One problem remains: in CL1, many touching nuclei are merged into one object. Notebook 02 flags these cells.**
 # 
-# - **Nuclei are cut into pieces.** In the sampled control images, 18 to 24% of CL1 objects and 41 to 54% of CL2 objects are pieces of one nucleus.
-# - **Cell outlines are too small and ragged.** They hold only 54 to 64% of the AGP signal in CL2, and 79 to 84% in CL1.
-# - **There is still real signal.** Random DMSO groups behave as they should, and TGFβ1 replicates well. So the experiment worked, and a new run should give cleaner data.
+# - **Lighting is even** across each image. Blurred and over-exposed images are flagged one by one in notebook 02 (`02.qc.ipynb`).
+# - **Nuclei are not cut into pieces.** Only 0.2–0.4% (CL1) and 2.0–3.1% (CL2) of nuclei hold too little DNA, and both cell lines show the expected G1 and G2 DNA peaks.
+# - **CL1 has merged nuclei.** 14–28% of CL1 objects hold more DNA than one nucleus can. The scorecard does not test for this; section 7.3 shows it, and notebook 02 flags these cells.
+# - **Cell outlines are mostly good.** They hold 80–91% of the cell-body stain. CL2 outlines are slightly ragged at 1h and 4h.
+# - **The profiles carry biology.** 19–52% of treatments give reproducible profiles, and this rises with time. TGFβ1 changes the cells more over time, as expected.
 # 
-# Sections 10 and 11 give the full scorecard and the settings to change.
-# 
-# ## How to read this notebook
-# 
-# Each section follows the same pattern:
-# 
-# - **What we check**: the question, in one line.
-# - **Why it matters**: what goes wrong later if this check fails.
-# - **What good looks like**: the limit for a pass.
-# - **What we found**: the result and what it means.
-# 
-# We explain *what* we check and *why*. We do not explain how each method works.
-# 
-# **Words used in this notebook**
-# 
-# | Word | Meaning |
+# | Term | Meaning |
 # |---|---|
-# | Site | One image position in a well. Each well has 9 sites. |
-# | Feature | One number that CellProfiler measures for a cell, such as nucleus area. |
-# | Profile | The set of all features for one cell, site or well. |
-# | Segmentation | Finding the outline of each nucleus and cell in an image. |
-# | Control well | A well with DMSO only, so no compound and no ligand. |
-# | Replicate wells | Wells that received the same treatment. |
-# | Median absolute deviation (MAD) | A measure of spread that outliers do not distort. |
-# | CL1, CL2 | The two cell lines on each plate. |
-# | DNA, RNA, AGP, ER, Mito | The 5 stained channels. AGP marks actin, the Golgi and the cell membrane. ER is the endoplasmic reticulum. Mito is the mitochondria. |
-# | PASS, WARN, FAIL | The grades of a check, based on the limits below. |
-
+# | Segmentation | Drawing the outline of each nucleus and cell. |
+# | Object | One nucleus, with its cell, as CellProfiler found it. Ideally, one object is one cell. |
+# | Site | One image in a well (9 per well). |
+# | Feature | One measurement of a cell, such as nucleus area. |
+# | Profile | All features of a cell, or their median over a well. |
+# | CL1, CL2 | The two cell lines, in columns 1–12 and 13–24. |
+# | DNA, RNA, AGP, ER, Mito | The 5 stains. AGP marks actin, Golgi and plasma membrane, so it shows the whole cell body. ER is the endoplasmic reticulum. |
+# | PASS, WARN, FAIL | Grades from the limits below. WARN means "look closer". |
+# 
 # ## Setup
 # 
-# Paths and settings are here. The slow steps save their results in `cache_dir`, so later runs take minutes. Delete that folder to rebuild the results.
-# 
-# This notebook needs about 200 GB of memory the first time it runs. Run it with `_run-qc.sbatch`, not on the login node.
+# Run with `_run.sbatch` (about 200 GB of memory the first time). Slow steps are saved in `results/cache`; delete the folder to recompute them.
 
 # In[1]:
 
@@ -77,13 +60,14 @@ from statsmodels.stats.proportion import proportion_confint
 
 seed = 0
 
-profiles_dir = pathlib.Path("../../data/sc-profiles").resolve(strict=True)
-metadata_dir = profiles_dir / "metadata"
-results_dir = pathlib.Path("../../../../results/PALS-screen-profiles").resolve(strict=True)
+profiles_dir = pathlib.Path("../0.prepare-profiles/results/single-cell-profiles").resolve(strict=True)
+metadata_dir = pathlib.Path("../../data/metadata").resolve(strict=True)
+cellprofiler_dir = pathlib.Path("../../data/sc-profiles/PALS-screen-profiles-v2").resolve(strict=True)
 images_dir = pathlib.Path("../../../../project-data/PALS-screen-data").resolve(strict=True)
 
-# slow results are saved here; delete the folder to rebuild them
-cache_dir = pathlib.Path("../../data/qc-cache").resolve()
+# results of this module; slow steps are saved in cache_dir, delete it to rebuild them
+results_dir = pathlib.Path("results").resolve()
+cache_dir = results_dir / "cache"
 cache_dir.mkdir(parents=True, exist_ok=True)
 
 # cells kept per well for the feature checks
@@ -92,7 +76,7 @@ cells_per_well = 100
 images_per_group = 12
 
 # CellProfiler settings under test (2_analysis.cppipe, IdentifyPrimaryObjects)
-nucleus_diameter_range = (20, 80)
+nucleus_diameter_range = (30, 120)
 
 channels = ["DNA", "RNA", "AGP", "ER", "Mito"]
 channel_wavelength = {"DNA": 405, "RNA": 488, "AGP": 561, "Mito": 638, "ER": 730}
@@ -109,9 +93,9 @@ pl.Config.set_tbl_width_chars(170)
 pl.Config.set_fmt_str_lengths(50)
 
 
-# ## Limits for each check
+# ## Limits
 # 
-# We wrote these limits before we made the final figures, so the result cannot move the limit. However, we had looked at a few images first, so the limits are not fully blind. Most are rules of thumb from image-based profiling, not exact standards. A value in the "warn" range means "look closer", not "failed".
+# We set these limits before we looked at the final results. Most are rules of thumb from image-based profiling.
 
 # In[3]:
 
@@ -119,8 +103,6 @@ pl.Config.set_fmt_str_lengths(50)
 # name: (pass limit, warn limit, "low" if lower is better else "high")
 limits = {
     "Missing sites (%)": (0.5, 2, "low"),
-    "Sites out of focus (%)": (2, 5, "low"),
-    "Sites with over 1% saturated DNA pixels (%)": (2, 5, "low"),
     "Brightness change across the field (max/min)": (1.2, 1.4, "low"),
     "Nuclei near the upper size limit (%)": (0.5, 2, "low"),
     "Nuclei with too little DNA (%)": (10, 20, "low"),
@@ -152,24 +134,13 @@ def score(name, value, group="All"):
     scorecard.append({"check": name, "group": group, "value": round(float(value), 2), "grade": grade(name, value)})
 
 
-# ## The decision rule
+# ## When would we run CellProfiler again?
 # 
-# We fixed this rule before the final run.
+# We run CellProfiler again if two things are true. First, a segmentation check (7.2–7.5) fails in at least half of the 6 plate and cell line groups. Second, the image check in 7.4 confirms the cause.
 # 
-# - **Starting assumption (H0):** the current segmentation is good enough, so we keep the data.
-# - **Alternative (H1):** the segmentation has a systematic error, so features describe the wrong objects, and we must run CellProfiler again.
-# - **We reject H0** if a segmentation check (7.2 to 7.5) fails in at least half of the plate and cell line groups, **and** the positive control in 7.4 supports the cause.
-# - **Controls:** the DNA peaks are the positive control for segmentation. TGFβ1 is the positive control for biology. Random DMSO groups are the negative control for the replicate test.
-
-# ## 1. The experiment
+# ## 1. Experiment design
 # 
-# **What we check:** which plates, wells and treatments we have, and whether the metadata agrees with the data.
-# 
-# **Why it matters:** every later check compares the right wells only if the labels are right.
-# 
-# **What good looks like:** each plate has all expected wells, and the metadata has one clear label per well.
-# 
-# The screen has 3 plates, one for each time point after treatment (1h, 4h and 24h). The plates share one layout.
+# Three plates (1h, 4h and 24h after treatment) share one layout. We check that every well has a clear label.
 
 # In[4]:
 
@@ -254,19 +225,16 @@ for time in plate_order:
 pl.DataFrame(settings)
 
 
-# **What we found**
+# **Result**
 # 
-# - The design has 5 compounds at 3 doses and 2 ligands (TGFβ1 and IL6) at 3 doses, with 3 replicate wells per cell line on each plate. Each cell line has 127 imaged control wells.
-# - **Columns 1 to 12 are CL1 and columns 13 to 24 are CL2.** The ligand file confirms this rule for all 36 ligand wells. The compound wells follow the same mirrored layout. So cell line and plate side cannot be separated.
-# - **The 24h plate used longer exposures:** 200 ms instead of 100 ms for ER, and 90 ms instead of 80 ms for AGP. This means that time and exposure cannot be separated, so raw brightness must not be compared between the 24h plate and the others. We avoid this problem by comparing each well with the DMSO wells of its own plate.
-# - **`parameters.json` says the cell line is `MDA-MB-231_wt_ko`**, but the plate names say Panc1 and hPSC. This is probably an old value that nobody updated, but we cannot confirm it from the data. We also do not have a record of which line is CL1 and which is CL2.
-
+# - 5 compounds and 2 ligands (TGFβ1, IL6), each at 3 doses, with 3 replicate wells per cell line and plate. Each cell line has 127 imaged DMSO control wells.
+# - **Cell line follows plate side** (CL1 in columns 1–12, CL2 in 13–24), so the two cannot be separated.
+# - **The 24h plate used longer exposures** for ER (200 vs 100 ms) and AGP (90 vs 80 ms). Compare each well only with the DMSO wells of its own plate.
+# - `parameters.json` names the cell line `MDA-MB-231_wt_ko`, which does not match the plate names (Panc1, hPSC). Which line is CL1 is not recorded.
+# 
 # ## 2. Load the data
 # 
-# We use two levels of the data:
-# 
-# - **Every cell, a few columns.** About 30 columns for all 4.4 million cells, to check counts, sizes and shapes.
-# - **Summaries of all columns.** The median profile of each site, and a random sample of cells from each well.
+# We load about 30 key columns for all 2.6 million cells, the median profile of each site, and 100 random cells per well.
 
 # In[6]:
 
@@ -327,8 +295,8 @@ print(f"{len(features)} features out of {len(all_columns)} columns")
 
 def build_summaries(time):
     """Save the median profile per site and a random sample of cells for one plate."""
-    site_path = cache_dir / f"site_profiles_{time}.parquet"
-    sample_path = cache_dir / f"cell_sample_{time}.parquet"
+    site_path = cache_dir / f"site-median-profiles_{time}.parquet"
+    sample_path = cache_dir / f"cell-sample_{time}.parquet"
     if site_path.exists() and sample_path.exists():
         return
     table = pl.read_parquet(plate_files[time], columns=["Metadata_Well", "Metadata_Site", *features])
@@ -344,19 +312,15 @@ for time in plate_order:
     build_summaries(time)
 
 site_profiles = pl.concat(
-    [pl.read_parquet(cache_dir / f"site_profiles_{t}.parquet").with_columns(pl.lit(t).alias("plate")) for t in plate_order]
+    [pl.read_parquet(cache_dir / f"site-median-profiles_{t}.parquet").with_columns(pl.lit(t).alias("plate")) for t in plate_order]
 ).join(wells, on="Metadata_Well", how="left")
-cell_sample = pl.concat([pl.read_parquet(cache_dir / f"cell_sample_{t}.parquet") for t in plate_order])
+cell_sample = pl.concat([pl.read_parquet(cache_dir / f"cell-sample_{t}.parquet") for t in plate_order])
 print(site_profiles.shape, cell_sample.shape)
 
 
 # ## 3. Is the data complete?
 # 
-# **What we check:** whether every site was processed, and whether any CellProfiler step reported an error.
-# 
-# **Why it matters:** missing sites reduce the cells in a well. Hidden errors can produce wrong numbers without any warning.
-# 
-# **What good looks like:** no more than 0.5% of sites missing, and no module errors.
+# **Pass if:** under 0.5% of sites are missing, and no CellProfiler step reports an error.
 
 # In[9]:
 
@@ -383,112 +347,19 @@ print("Sites with a module error:", images.select(pl.any_horizontal(pl.col(error
 score("Missing sites (%)", completeness["missing_pct"].max())
 
 
-# **What we found**
+# **Result: PASS.** All 3,420 sites per plate were processed, with no errors. Three sites on the 24h plate (wells M04, N09, N12) have no cells left. They lie in the CL1 area with few cells (section 5). In total, the data holds 2,647,721 cells.
 # 
-# **Pass.** The data is complete. Only 1 of 10,260 sites is missing (well N12, 24h plate), and no CellProfiler module reported an error. The data holds 4,377,843 cells.
+# ## 4. Are the images sharp and not over-exposed?
+# 
+# Notebook 02 (`02.qc.ipynb`) now checks this for each image, and flags blurred and over-exposed images in the QC profile.
 
-# ## 4. Are the images sharp, and are they too bright?
+# ## 5. Are cell numbers even across the plate?
 # 
-# **What we check:** focus and saturation, for each channel and site.
+# Cell density changes cell shape. An uneven plate adds differences that have nothing to do with treatment.
 # 
-# **Why it matters:** a blurred image changes texture and granularity features, and it can look like a drug effect. A saturated pixel hides real differences in brightness, because the camera cannot record any higher value.
-# 
-# **What good looks like:**
-# 
-# - No more than 2% of sites out of focus. We call a site out of focus when its focus measure is more than 5 MADs below its plate and cell line.
-# - No more than 2% of sites have over 1% saturated DNA pixels.
+# **Pass if:** control wells have similar counts, with no row or column pattern.
 
 # In[10]:
-
-
-def robust_z(column, by):
-    """Distance from the group median, in units of the group's spread."""
-    median = pl.col(column).median().over(by)
-    mad = (pl.col(column) - median).abs().median().over(by) * 1.4826
-    return (pl.col(column) - median) / mad
-
-
-focus_rows = []
-for ch in channels:
-    column = f"Image_ImageQuality_PowerLogLogSlope_{ch}"
-    focus_rows.append(
-        images.select(
-            "plate", "cell_line", "Metadata_Acquisition", "Metadata_Well",
-            pl.lit(ch).alias("channel"),
-            pl.col(column).alias("slope"),
-            pl.col(f"Image_ImageQuality_FocusScore_{ch}").alias("focus_score"),
-            robust_z(column, ["plate", "cell_line"]).alias("z"),
-        )
-    )
-focus = pl.concat(focus_rows)
-out_of_focus = focus.group_by("plate", "cell_line").agg(
-    (100 * pl.col("Metadata_Acquisition").filter(pl.col("z") < -5).n_unique() / pl.col("Metadata_Acquisition").n_unique()).alias("pct")
-).sort("cell_line", "plate")
-print(out_of_focus)
-
-fig, axes = plt.subplots(1, 5, figsize=(15, 3.4), sharey=True)
-for ax, ch in zip(axes, channels):
-    sns.boxplot(
-        data=focus.filter(pl.col("channel") == ch).to_pandas(), x="plate", y="slope", hue="plate",
-        order=plate_order, palette=plate_colors, ax=ax, fliersize=1, legend=False,
-    )
-    ax.set_title(ch)
-    ax.set_xlabel("")
-axes[0].set_ylabel("Focus measure\n(lower = more blurred)")
-fig.suptitle("Focus is similar across plates", y=1.04)
-plt.show()
-
-for row in out_of_focus.iter_rows(named=True):
-    score("Sites out of focus (%)", row["pct"], f"{row['plate']} {row['cell_line']}")
-
-
-# In[11]:
-
-
-# PercentMaximal counts pixels at the image's own maximum, so it only means saturation
-# when that maximum is close to the top of the camera range
-saturation = pl.concat(
-    [
-        images.select(
-            "plate", "cell_line", pl.lit(ch).alias("channel"),
-            pl.when(pl.col(f"Image_ImageQuality_MaxIntensity_{ch}") >= 0.99)
-            .then(pl.col(f"Image_ImageQuality_PercentMaximal_{ch}"))
-            .otherwise(0.0)
-            .alias("saturated_pct"),
-        )
-        for ch in channels
-    ]
-)
-saturation_table = (
-    saturation.group_by("channel", "plate")
-    .agg(
-        pl.col("saturated_pct").median().round(4).alias("median_pct"),
-        pl.col("saturated_pct").max().round(2).alias("max_pct"),
-        (100 * (pl.col("saturated_pct") > 1).mean()).round(2).alias("sites_over_1pct"),
-    )
-    .sort("channel", "plate")
-)
-print(saturation_table)
-
-for row in saturation_table.filter(pl.col("channel") == "DNA").iter_rows(named=True):
-    score("Sites with over 1% saturated DNA pixels (%)", row["sites_over_1pct"], row["plate"])
-
-
-# **What we found**
-# 
-# **Pass.** Focus is stable: at most 1.64% of sites are out of focus in any group. DNA saturation is rare, at most 0.2% of sites. The Mito channel on the 24h plate has the most saturation, with 3.57% of sites over 1%. This does not change the decision, but those sites deserve a filter later.
-# 
-# The images themselves are not the cause of the problems we find below.
-
-# ## 5. Are the cell numbers healthy and even across the plate?
-# 
-# **What we check:** the number of cells per well, shown as a map of each plate.
-# 
-# **Why it matters:** cell density changes cell shape and many other features. If one plate region has fewer cells, its profiles differ for a reason that has nothing to do with the treatment.
-# 
-# **What good looks like:** similar numbers across control wells, with no clear pattern by row or column. We expect more cells at later time points, because cells divide.
-
-# In[12]:
 
 
 def plate_heatmaps(table, value, title, cmap=sequential, center=None, label=None):
@@ -525,7 +396,7 @@ well_counts = (
 plate_heatmaps(well_counts, "cells", "Cells per well", label="cells")
 
 
-# In[13]:
+# In[11]:
 
 
 control_counts = well_counts.filter(pl.col("well_type") == "control")
@@ -544,23 +415,19 @@ print(
 print(well_counts.sort("cells").head(10).select("plate", "Metadata_Well", "cells", "treatment"))
 
 
-# **What we found**
+# **Result: look closer at the 24h plate.**
 # 
-# **Look closer at the 24h plate.**
+# - At 1h and 4h, control wells are even (7–13% variation).
+# - At 24h, CL1 has patches with few cells (columns 3–4 in rows F–N, and rows M–N). This looks like a seeding or handling problem.
+# - CL2 nearly doubles from 1h to 24h (1,840 to 3,605 cells per control well). CL1 does not grow (2,300 to 2,085), but merged nuclei (section 7.3) make the CL1 count too low.
 # 
-# - At 1h and 4h, control wells are even (variation of 7 to 12%), and edge wells match inner wells (ratio 0.93 to 1.08).
-# - On the 24h plate, CL1 has clear patches with few cells, in columns 3 and 4 (rows F to N) and across rows M and N. This is also true in control wells: the variation is 23.8%, and edge wells have 1.3 times more cells than inner wells. The pattern suggests a problem with seeding or handling, not a treatment effect.
-# - CL2 appears to double from 3,277 to 6,276 cells per well, while CL1 grows only from 3,136 to 3,495. **Do not trust the CL2 number yet.** Section 7 shows that many CL2 "cells" are pieces of nuclei, so the true count is lower.
+# ## 6. Is the lighting even across each image?
+# 
+# A cell's brightness should not depend on where it sits in the image.
+# 
+# **Pass if:** the brightest and dimmest parts of the image differ by less than 1.2-fold.
 
-# ## 6. Is the brightness even across each image?
-# 
-# **What we check:** cell brightness at different positions in the image, after illumination correction. We use control wells only.
-# 
-# **Why it matters:** microscopes light the centre of an image more strongly than the corners. Without a good correction, a cell's brightness depends on where it sits in the image.
-# 
-# **What good looks like:** the brightest and dimmest parts of a 5 by 5 grid differ by a factor below 1.2.
-
-# In[14]:
+# In[12]:
 
 
 grid_bins = 5
@@ -592,33 +459,23 @@ for row in ratios.group_by("channel").agg(pl.col("ratio").max()).sort("channel")
     score("Brightness change across the field (max/min)", row["ratio"], row["channel"])
 
 
-# **What we found**
+# **Result: PASS.** They differ by at most 1.12-fold, so the illumination correction works.
 # 
-# **Pass.** The brightest and dimmest parts of the image differ by a factor of at most 1.09. The illumination correction works, and it needs no change.
-
-# ## 7. Did CellProfiler find the nuclei and cells correctly?
+# ## 7. Are nuclei and cells outlined correctly?
 # 
-# This is the most important section for our question. Features can only be right if the outlines are right. A nucleus cut in two gives two false "cells" with half a nucleus each. No later analysis step can repair this.
-# 
-# We test segmentation in five ways, starting with the images themselves.
+# This is the key section. Features are only right if the outlines are right. A nucleus cut in two becomes two false cells, and two merged nuclei become one false cell.
 # 
 # ### 7.1 Look at the outlines
 # 
-# **What we check:** the outlines drawn on real images, for control wells with a typical cell count.
-# 
-# **Why it matters:** the eye finds problems that summary numbers hide.
-# 
-# **What good looks like:** one white outline around each nucleus, and one yellow outline that follows each cell's edge.
-# 
-# Colors: red = AGP, green = ER, blue = DNA. White = nucleus outlines. Yellow = cell outlines.
+# Control wells with a typical cell count. Red = AGP, green = ER, blue = DNA. White = nucleus outline, yellow = cell outline.
 
-# In[15]:
+# In[13]:
 
 
 def plate_paths(time):
     """Folders with the masks and illumination functions of one plate."""
     plate = plate_names[time]
-    run_dir = pathlib.Path((results_dir / plate / "DONE").read_text().strip())
+    run_dir = pathlib.Path((cellprofiler_dir / plate / "DONE").read_text().strip())
     return run_dir / "masks" / plate, run_dir / "illum" / plate
 
 
@@ -673,24 +530,15 @@ for i, line in enumerate(["CL1", "CL2"]):
 plt.show()
 
 
-# **What we found**
+# **Result:** nuclei have one smooth outline each, and cell outlines reach the dim edge of the cell. In the dense CL1 clumps at 24h, we cannot see by eye whether each nucleus has its own outline (see 7.3).
 # 
-# **Two problems are clear.**
-# 
-# 1. **White lines cut through single nuclei.** This is common in CL2, and it also happens in CL1. A real nucleus should have one smooth outline.
-# 2. **Yellow cell outlines are ragged and too small.** In CL2, the outlines follow the bright green core of the cell and miss the wide, dim red area around it. This dim area looks like real cytoplasm, but someone who knows these cells should confirm this.
-# 
-# CL1 cells are smaller and grow in tight groups. CL2 cells are large and flat. One group of settings must work for both.
-
 # ### 7.2 Do nuclei fit the allowed size range?
 # 
-# **What we check:** the size of all nuclei, compared with the 20 to 80 pixel range set in the pipeline.
+# CellProfiler removes objects outside 30–120 pixels in diameter.
 # 
-# **Why it matters:** CellProfiler throws away any object outside this range. If real nuclei are bigger than 80 pixels, they get lost, or only their smaller pieces survive.
-# 
-# **What good looks like:** the sizes fall smoothly to near zero before the limits. A sharp cliff at a limit means the limit is cutting real nuclei. At most 0.5% of nuclei should be within 5% of the upper limit.
+# **Pass if:** the size curve falls to zero before both limits, with under 0.5% of nuclei near the upper limit.
 
-# In[16]:
+# In[14]:
 
 
 fig, axes = plt.subplots(1, 2, figsize=(13, 3.8), sharey=True)
@@ -698,7 +546,7 @@ for ax, line in zip(axes, ["CL1", "CL2"]):
     for time in plate_order:
         values = cells.filter((pl.col("plate") == time) & (pl.col("cell_line") == line) & (pl.col("well_type") == "control"))
         ax.hist(
-            values["Nuclei_AreaShape_EquivalentDiameter"].to_numpy(), bins=np.arange(15, 90, 1),
+            values["Nuclei_AreaShape_EquivalentDiameter"].to_numpy(), bins=np.arange(15, nucleus_diameter_range[1] + 10, 1),
             density=True, histtype="step", lw=2, color=plate_colors[time], label=time,
         )
     for limit in nucleus_diameter_range:
@@ -721,21 +569,15 @@ for row in near_limit.iter_rows(named=True):
     score("Nuclei near the upper size limit (%)", row["pct_near_upper_limit"], f"{row['plate']} {row['cell_line']}")
 
 
-# **What we found**
+# **Result: PASS.** At most 0.5% of nuclei are near the upper limit. The median diameter is 50–54 pixels in CL1 and 61–67 pixels in CL2. The CL1 24h curve has an extra shoulder at about 55–70 pixels, which merged nuclei would give.
 # 
-# **Fail, mainly in CL2.** Up to 2.47% of CL2 nuclei sit near the 80 pixel limit, and the CL2 curve stops abruptly at the limit, so the limit cuts off real nuclei. CL1 has fewer nuclei at the limit (0.46 to 0.90%).
+# ### 7.3 Does each nucleus hold the right amount of DNA?
 # 
-# The odd, flat shape of the CL2 curve is a second warning. It looks like a mix of whole nuclei and pieces.
+# This is a built-in control. A healthy nucleus holds one DNA set (G1) or two (G2), so total DNA shows two peaks, the second at twice the first. A piece of a nucleus falls below the first peak. Two merged nuclei fall above the second.
+# 
+# **Pass if:** there are two clear peaks, and under 10% of nuclei hold less than 70% of the first peak.
 
-# ### 7.3 Does each nucleus hold a full set of DNA?
-# 
-# **What we check:** the total DNA signal in each nucleus.
-# 
-# **Why it matters:** this check is a built-in positive control, and it needs no labels. A healthy cell has one full set of DNA before it copies its DNA (G1 phase) and two sets after (G2 phase). So the total DNA should show two peaks, with the second at twice the first. A piece of a cut nucleus holds only part of the DNA, so it falls below the first peak.
-# 
-# **What good looks like:** two peaks about a factor of 2 apart, and fewer than 10% of nuclei below 70% of the first peak. Dying cells and debris also fall below the peak, so a small share is normal.
-
-# In[17]:
+# In[15]:
 
 
 def g1_peak(values):
@@ -771,30 +613,19 @@ for row in low_dna.iter_rows(named=True):
     score("Nuclei with too little DNA (%)", row["pct_too_little_dna"], f"{row['plate']} {row['cell_line']}")
 
 
-# **What we found**
+# **Result: PASS for cut nuclei, but CL1 has merged nuclei.**
 # 
-# **Fail, and this check gives the clearest result.**
+# - Few nuclei hold too little DNA: 0.2–0.4% in CL1 and 2.0–3.1% in CL2. Both lines show clear G1 and G2 peaks.
+# - **CL1 has extra peaks at 3 and 4 DNA sets.** No single nucleus holds 3 sets, but a G1 and a G2 nucleus in one outline do. Notebook 02 counts these objects: 13.7–27.5% of CL1 and 4.5–6.4% of CL2 objects hold more than 2.8 times the first peak.
+# - This check has no limit for high DNA, so the scorecard does not show this problem.
 # 
-# - CL1 shows two sharp peaks a factor of 2 apart, as expected. So the DNA stain and the intensity measurement work well.
-# - CL2 has a sharp first peak, but a large, wide shoulder lies below it, and the second peak is weak.
-# - 42 to 50% of CL2 objects and 14% of CL1 objects hold too little DNA to be a whole nucleus. Some of these may be dying cells, but this does not explain half of the objects in a control well.
+# ### 7.4 Are nuclei cut or lost?
+# 
+# We look at the masks of 72 control images. Two touching nuclei usually form a shape with a dent, while one nucleus cut in two forms a smooth shape. We also look for DNA signal with no nucleus on it (a lost nucleus).
+# 
+# **Pass if:** under 2% of objects are pieces of a cut nucleus, and under 2% of the DNA signal has no nucleus. **Control:** if the pieces are real, joining them must remove the low-DNA objects.
 
-# ### 7.4 Are nuclei being cut, or lost?
-# 
-# **What we check:** we go back to the images and the saved masks to answer two questions.
-# 
-# 1. **Cut nuclei.** Do objects touch and form one smooth, round shape? Two separate nuclei that touch usually form a shape with a dent. One nucleus cut in two forms a smooth shape. We call a group "one cut nucleus" when its solidity (how close it is to a filled, convex shape) is at least 0.9.
-# 2. **Lost nuclei.** Is there bright DNA signal with no nucleus object on it? This is what remains when CellProfiler throws an object away.
-# 
-# **Why it matters:** this test shows *why* the DNA check above did or did not pass. It also gives us the real nucleus size, so we can choose a better setting.
-# 
-# **What good looks like:**
-# 
-# - Fewer than 2% of objects are pieces of one cut nucleus.
-# - Fewer than 2% of DNA signal pixels have no nucleus object.
-# - Positive control: if cutting is the real cause, joining the pieces back together must move the low-DNA objects up to the first peak. If the share of low-DNA objects stays the same, the cause is something else.
-
-# In[18]:
+# In[16]:
 
 
 def measure_site(time, site, threshold, illumination):
@@ -860,9 +691,9 @@ def measure_group(args):
     return measure_site(*args)
 
 
-group_path = cache_dir / "nuclei_groups.parquet"
-object_path = cache_dir / "nuclei_objects.parquet"
-summary_path = cache_dir / "site_segmentation.parquet"
+group_path = cache_dir / "nucleus-groups.parquet"
+object_path = cache_dir / "nucleus-objects.parquet"
+summary_path = cache_dir / "site-segmentation.parquet"
 
 if not (group_path.exists() and object_path.exists() and summary_path.exists()):
     chosen = (
@@ -886,7 +717,7 @@ nuclei_objects = pl.read_parquet(object_path).join(site_lookup, on=["site", "pla
 print(site_segmentation.height, "sites,", nuclei_objects.height, "objects")
 
 
-# In[19]:
+# In[17]:
 
 
 cut_table = (
@@ -900,7 +731,7 @@ cut_table = (
     .join(
         site_segmentation.group_by("cell_line", "plate").agg(
             (100 * pl.col("lost_pixels").sum() / pl.col("foreground_pixels").sum()).round(1).alias("pct_lost_signal"),
-            pl.col("lost_large_objects").sum().alias("lost_objects_over_80px"),
+            pl.col("lost_large_objects").sum().alias("lost_objects_over_upper_limit"),
             pl.col("agp_inside_cells_pct").median().round(1).alias("agp_inside_cells_pct"),
         ),
         on=["cell_line", "plate"],
@@ -915,7 +746,7 @@ for row in cut_table.iter_rows(named=True):
     score("DNA signal without a nucleus object (%)", row["pct_lost_signal"], group)
 
 
-# In[20]:
+# In[18]:
 
 
 # positive control: join the pieces of cut nuclei, then repeat the DNA check
@@ -954,44 +785,38 @@ axes[0].set_ylabel("Share of objects")
 plt.show()
 print(pl.DataFrame(repair_rows))
 
-# the real nucleus size, after the pieces are joined: this guides the new size range
+# the real nucleus size, after the pieces are joined
 print(
     repaired.with_columns((2 * (pl.col("area") / np.pi).sqrt()).alias("diameter"))
     .group_by("cell_line")
     .agg(
         *[pl.col("diameter").quantile(q).round(0).alias(f"p{int(100 * q)}") for q in (0.01, 0.05, 0.5, 0.95, 0.99)],
-        (100 * (pl.col("diameter") > 80).mean()).round(1).alias("pct_over_80px"),
-        (100 * (pl.col("diameter") > 120).mean()).round(1).alias("pct_over_120px"),
+        (100 * (pl.col("diameter") < nucleus_diameter_range[0]).mean()).round(1).alias("pct_under_lower_limit"),
+        (100 * (pl.col("diameter") > nucleus_diameter_range[1]).mean()).round(1).alias("pct_over_upper_limit"),
     )
     .sort("cell_line")
 )
 
 
-# **What we found**
+# **Result: WARN, but most "cut nuclei" are probably two touching nuclei.**
 # 
-# **Fail. Cutting is the main cause, and the positive control supports this.** This test used 72 images from control wells, with 33,617 objects.
+# - 1.9–4.3% of objects form a smooth shape with a neighbor.
+# - Joining them does not change the share of low-DNA objects (CL1: 1.3% → 1.3%, CL2: 4.5% → 4.1%).
+# - The joined shapes are larger than one nucleus (median 73–95 pixels). So most are real nuclei that touch closely, not pieces.
+# - 0.3–2.4% of the DNA signal has no nucleus.
 # 
-# - **Cut nuclei:** 18 to 24% of CL1 objects and 41 to 54% of CL2 objects are pieces of a smooth, single shape.
-# - **Positive control:** when we join the pieces, the low-DNA objects fall from 15.2% to 8.6% in CL1, and from 46.6% to 22.9% in CL2. In CL2, a clear second peak appears at twice the first peak. This is what we expect if the pieces belong together. This result supports H1. We did not expect the share to reach zero, because we only joined smooth shapes, and some low-DNA objects are debris.
-# - **Lost nuclei:** this is a smaller problem. At most 3.8% of DNA signal has no object, and these lost objects larger than 80 pixels equal about 0.6% of all objects.
-# - **Real nucleus size:** after joining, the median diameter is 48 pixels in CL1 and 60 pixels in CL2. In CL2, 6.1% of nuclei are over 80 pixels, and only 0.2% are over 120 pixels.
+# ### 7.5 Do cell outlines follow the cell edge?
 # 
-# **Why the cutting happens.** The pipeline separates touching nuclei by looking for bright spots inside them. Nuclei have uneven DNA staining, so one nucleus can have several bright spots. The minimum diameter of 20 pixels makes this worse, because CellProfiler uses that value to choose how much to blur the image before it looks for spots. With 20 pixels, it blurs very little, so it finds many spots in the large CL2 nuclei.
+# About two thirds of the features come from the cell and cytoplasm outlines.
+# 
+# **Pass if:**
+# 
+# - the median outline smoothness (solidity) is at least 0.85,
+# - at least 90% of the AGP stain lies inside cells,
+# - under 2% of cells have almost no cytoplasm, and
+# - DNA is at least 3 times brighter in the nucleus than in the cytoplasm.
 
-# ### 7.5 Do the cell outlines follow the real cell edges?
-# 
-# **What we check:**
-# 
-# - **Solidity:** how smooth a cell outline is. Ragged outlines have low solidity.
-# - **Cytoplasm left over:** cytoplasm is the cell minus the nucleus. If a cell outline barely extends past the nucleus, its cytoplasm features describe almost nothing.
-# - **AGP signal inside cell outlines:** how much of the cell-body staining sits inside an outline. AGP marks the cell membrane and actin, so it shows the full cell area.
-# - **Stains in the right place:** DNA must be much brighter in the nucleus than in the cytoplasm. This is a positive control for both the outlines and the channel labels.
-# 
-# **Why it matters:** about two thirds of our features come from the Cells and Cytoplasm outlines. Wrong outlines mean that these features measure the wrong pixels.
-# 
-# **What good looks like:** median solidity of at least 0.85, fewer than 2% of cells with cytoplasm below 10% of cell area, at least 90% of AGP signal inside cells, and DNA at least 3 times brighter in the nucleus than in the cytoplasm.
-
-# In[21]:
+# In[19]:
 
 
 cell_shape = (
@@ -1024,7 +849,7 @@ print(
 )
 
 
-# In[22]:
+# In[20]:
 
 
 compartment_ratio = pl.DataFrame(
@@ -1047,31 +872,23 @@ print("Nucleus brightness divided by cytoplasm brightness (median per cell)")
 compartment_ratio
 
 
-# **What we found**
+# **Result: mostly PASS, WARN for CL2.**
 # 
-# **Fail.**
+# - Solidity is 0.88–0.89 in CL1 and 0.83–0.88 in CL2 (below 0.85 at 1h and 4h).
+# - 80–91% of the AGP stain lies inside cells. CL2 at 1h is lowest.
+# - Under 1% of cells have almost no cytoplasm, and DNA is 9.7–11.7 times brighter in the nucleus.
+# - 151 objects are giant (over 100,000 pixels). They are rare, but clearly wrong.
+# - The filter for cells on the image border removes 11–17% of cells, most in CL2, which has the largest cells.
 # 
-# - **Ragged outlines:** median solidity is 0.78 to 0.80 in every group. The limit is 0.85.
-# - **Missed cell area:** only 54 to 64% of AGP signal is inside CL2 cells, and 79 to 84% in CL1.
-# - **Almost no cytoplasm:** 7 to 11% of CL2 cells, and up to 7% of CL1 cells, have cytoplasm below 10% of the cell area. Between 0.25 and 1.82% have no cytoplasm at all. These cells cause the missing values in section 8.
-# - **Giant objects:** 61 objects are over 100,000 pixels, and the largest covers about a third of an image. They are rare, but they are clearly errors.
-# - **Stains in the right place:** this positive control passes for DNA, which is 8 to 9.5 times brighter in the nucleus than in the cytoplasm. So the DNA channel is correct. The AGP, ER and Mito ratios are close to 1, which we did not set a limit for. Light from cell parts above and below the nucleus may cause this, but this data cannot show it.
-# 
-# The filter for cells touching the image border removes about 10% of cells on every plate. This is even across plates and is not a concern.
-
 # ## 8. Are the features usable?
 # 
-# **What we check:** missing values, features that never change, and features that repeat each other.
-# 
-# **Why it matters:** a feature with many missing values or no variation adds no information. Many near-identical features give one kind of measurement too much weight.
-# 
-# **What good looks like:** few missing values and few constant features. Many similar features are normal in CellProfiler data, and we remove them later.
+# **Pass if:** few values are missing, and no feature is constant.
 
-# In[23]:
+# In[21]:
 
 
 null_counts = pl.concat(
-    [pl.read_csv(path) for path in sorted(profiles_dir.glob("*.null_counts.csv"))]
+    [pl.read_csv(path) for path in sorted(profiles_dir.glob("*_missing-values.csv"))]
 ).group_by("column").agg(pl.col("n_null").sum())
 n_cells = cells.height
 feature_nulls = null_counts.filter(pl.col("column").is_in(features)).with_columns((100 * pl.col("n_null") / n_cells).alias("pct_missing"))
@@ -1088,7 +905,7 @@ print(f"Constant features: {len(constant)}", constant[:6])
 print(feature_nulls.sort("n_null", descending=True).head(5))
 
 
-# In[24]:
+# In[22]:
 
 
 well_columns = ["plate", "Metadata_Well", "cell_line", "well_type", "treatment", "edge", "row", "column"]
@@ -1123,29 +940,17 @@ print(f"{len(usable)} usable features -> {len(selected)} after dropping near cop
 print(pl.Series([name.split("_")[0] + "_" + name.split("_")[1] for name in selected_names]).value_counts(sort=True).head(12))
 
 
-# **What we found**
+# **Result: PASS.** All 3,041 features have at most 0.1% missing values, and none is constant. 885 remain after we remove near-duplicates, which is normal.
 # 
-# **Pass.** No feature is constant, and the largest share of missing values is 1.46%. All 3,041 features can stay, and 840 remain after we remove near copies. Removing near copies is a normal step.
-# 
-# This pass has a limit: these checks only show that the numbers exist. They cannot show that the numbers describe the right objects. Section 7 shows that many do not.
-
-# ## 9. Do the profiles carry biology or noise?
-# 
-# The earlier checks ask whether the measurements look right. This section asks whether they are useful. Good profiles should meet three conditions:
-# 
-# 1. Differences in control wells come from cell line and time, not from the plate position.
-# 2. Replicate wells of a treatment look more alike than wells of different treatments.
-# 3. A treatment with a known effect shows that effect.
+# ## 9. Do the profiles carry biology?
 # 
 # ### 9.1 What drives the differences between control wells?
 # 
-# **What we check:** how much of the variation in control wells links to plate, cell line and cell count.
+# We expect cell line and plate (time) to matter, but not cell count.
 # 
-# **Why it matters:** cell line and plate are expected to matter. But the 24h plate used longer exposures, so time and exposure cannot be separated. Cell count effects can also hide treatment effects.
-# 
-# **What good looks like:** plate and cell line form clear groups. Inside each group, cell count explains only a small part of the variation.
+# **Pass if:** control wells group by plate and cell line, and cell count explains little inside each group.
 
-# In[25]:
+# In[23]:
 
 
 control_raw = well_profiles.filter(pl.col("well_type") == "control")
@@ -1186,7 +991,7 @@ print(f"  plate:     {np.nanmedian(share_explained(raw_matrix, plate_labels)):.2
 print(f"  cell line: {np.nanmedian(share_explained(raw_matrix, line_labels)):.2f}")
 
 
-# In[26]:
+# In[24]:
 
 
 # inside each plate and cell line: how strongly does cell count drive the profile?
@@ -1202,27 +1007,19 @@ for (time, line), part in well_info.with_row_index("position").filter(pl.col("we
 print(pl.DataFrame(rows).sort("cell_line", "plate"))
 
 
-# **What we found**
+# **Result: as expected, but cell count matters.**
 # 
-# **As expected for plate and cell line, with a warning for cell count.**
+# - Control wells form 6 clear groups (plate × cell line). Cell line explains most of the variation. One 24h CL2 well is an outlier.
+# - Plate differences mix time with the 24h exposure change (section 1).
+# - **Cell count drives many features** in CL1 at 24h (62% of features) and CL2 at 4h (52%). Correct for cell count in later analysis.
 # 
-# - Control wells form 6 clear groups, one per plate and cell line. Cell line explains the most (median share 0.50), and plate less (0.15). Two wells on the 24h plate sit outside their group.
-# - The plate effect mixes time and exposure, as section 1 explains.
-# - **Cell count has a strong effect in some groups.** It explains over 25% of the variation in 56% of features for CL1 at 24h, and in 50% for CL2 at 4h. In the other groups the share is 17 to 37%. So density is a real source of noise, and the later analysis must account for it.
-
 # ### 9.2 Do replicate wells agree?
 # 
-# **What we check:** the share of treatments whose 3 replicate wells look more alike than random wells of different treatments. This share is called **percent replicating**. We test each plate and cell line on its own.
+# We test whether the 3 replicate wells of a treatment are more alike than random wells. The share of treatments that pass is the **percent replicating**. As a negative control, random groups of DMSO wells should pass only about 5% of the time.
 # 
-# **Why it matters:** this is the most useful summary of profile quality. If replicates do not agree, a treatment's profile is mostly noise.
-# 
-# **What good looks like:** at least 50% of treatments replicate.
-# 
-# **Negative control:** random groups of 3 DMSO wells have no shared treatment, so only about 5% should pass. If many pass, the test is biased, and position or plate effects are the likely cause.
-# 
-# We use a pass line of the 95th percentile of the random groups.
+# **Pass if:** at least 50% of treatments replicate.
 
-# In[27]:
+# In[25]:
 
 
 rng = np.random.default_rng(seed)
@@ -1305,27 +1102,19 @@ for row in replicating.iter_rows(named=True):
     score("Replicating DMSO groups (negative control, %)", row["dmso_pass_pct"], group)
 
 
-# **What we found**
+# **Result: mixed.**
 # 
-# **Mixed, but this is the most encouraging result.**
+# - 19–29% of treatments replicate at 1h, 38–43% at 4h and 43–52% at 24h. Only CL2 at 24h reaches 50%. Each value rests on 21 treatments, so it is uncertain (for example, 32–72% for CL2 at 24h).
+# - Agreement rises with time, as expected.
+# - The negative control passes: 2.4–6.2% of DMSO groups pass.
 # 
-# - Percent replicating is 19 to 24% at 1h, 48% at 4h, and 43 to 62% at 24h. Only CL2 at 24h meets the 50% limit. Each value rests on 21 treatments, so the ranges are wide (for example, 41 to 79% for CL2 at 24h).
-# - It rises with time, which is what we expect, because treatments need time to change cells. Many treatments may also have no effect, so 100% is not a realistic target.
-# - **The negative control passes:** 1.4 to 7.2% of random DMSO groups pass, close to the expected 5%. So the test is not biased.
+# ### 9.3 Does TGFβ1 show the expected effect?
 # 
-# These profiles carry real signal even with the segmentation errors. We expect cleaner outlines to improve this result, but we have not tested that.
+# TGFβ1 changes cell shape and adhesion in many pancreatic cancer lines, so it is our positive control. We measure how far each treatment moves from DMSO. DMSO wells themselves score about 0.6.
+# 
+# **Pass if:** TGFβ1 moves further at 24h than at 1h, and further at a high dose than at a low dose.
 
-# ### 9.3 Does a known treatment show the expected effect?
-# 
-# **What we check:** how far each treatment moves from DMSO, by dose and time. We use TGFβ1 as the positive control, because TGFβ1 is known to change cell shape and adhesion (epithelial-mesenchymal transition) in many pancreatic cancer lines. We expect the effect to grow with time and dose. CL1 and CL2 may respond differently, and we cannot predict this from the metadata.
-# 
-# **Why it matters:** replicate agreement shows that a signal is reproducible. It does not show that the signal is biology. A known effect supports that.
-# 
-# **What good looks like:** TGFβ1 moves further from DMSO at 24h than at 1h, and further at the high dose than at the low dose.
-# 
-# We measure the distance as the median absolute feature change compared with the plate's DMSO wells. A control well gives about 0.6 to 0.7, so that is the level of noise.
-
-# In[28]:
+# In[26]:
 
 
 distances = (
@@ -1369,7 +1158,7 @@ axes[0].legend(title="Dose", frameon=False)
 plt.show()
 
 
-# In[29]:
+# In[27]:
 
 
 # which part of the cell carries the replicate signal?
@@ -1391,23 +1180,19 @@ for name, columns in feature_groups.items():
 print(pl.DataFrame(rows).sort("features", "cell_line"))
 
 
-# **What we found**
+# **Result: PASS for time, not for dose.**
 # 
-# **TGFβ1 partly passes as a positive control, and IL6 shows no clear effect.**
+# - TGFβ1 profiles replicate in 9 of 18 tests (plate × cell line × dose), and move up to 1.57 from DMSO (DMSO: 0.58–0.66).
+# - All 6 TGFβ1 groups move further at 24h than at 1h.
+# - At 24h, the medium dose moves furthest in both cell lines, so there is no clear dose response.
+# - IL6 replicates in only 1 of 18 tests, which chance alone would give.
+# - Nucleus, cell and cytoplasm features perform about equally (32–37% replicating).
 # 
-# - **TGFβ1 is reproducible:** 12 of its 18 tests pass (plate, cell line and dose together). Its distance from DMSO reaches 1.44, compared with 0.57 to 0.67 for controls.
-# - **Time:** the pattern only partly fits the prediction. In CL1, the low and medium doses are furthest from DMSO at 24h, but the high dose peaks at 4h. In CL2, the low and medium doses peak at 4h.
-# - **Dose:** we did not see the expected dose response. In CL2, the high dose has the smallest effect at 1h and 4h, and it reaches only 0.85 at 24h. This does not support the prediction. It may be a biological effect, or a problem with the high-dose wells, or noise, because each dose has only 3 wells. It deserves a check after the new run.
-# - **IL6:** only 1 of 18 tests passes, which is what chance alone would give. IL6 may have no visible effect on these cells, or the profiles may not be able to detect it. We cannot tell these apart.
-# - **Part of the cell:** Nuclei, Cells and Cytoplasm features perform about equally (30 to 44%). No single group fails, so none of them can be dropped.
-# 
-# We cannot say from this data that TGFβ1 caused an epithelial-mesenchymal transition. We only see that the profiles change in a reproducible way.
-
 # ## 10. Scorecard
 # 
-# This table collects every check. For checks measured per plate or cell line, it shows the worst result.
+# The worst result of each check across plates and cell lines.
 
-# In[30]:
+# In[28]:
 
 
 results_table = pl.DataFrame(scorecard)
@@ -1435,61 +1220,5 @@ order = {name: i for i, name in enumerate(limits)}
 worst = worst.with_columns(pl.col("check").replace_strict(order, return_dtype=pl.Int64).alias("order")).sort("order").drop("order")
 print(worst)
 
-results_table.write_csv(cache_dir / "qc_scorecard.csv")
+results_table.write_csv(results_dir / "quality-scorecard.csv")
 
-
-# ## 11. Decision
-# 
-# ### Verdict
-# 
-# **We reject H0: change the CellProfiler settings and run all 3 plates again.** The rule from the start of this notebook is met. Five of the 7 segmentation checks fail in at least half of the groups (too little DNA, cut nuclei, AGP signal, cytoplasm and solidity), and the DNA positive control supports the cause (section 7.4).
-# 
-# | Part of the data | Status | Reason |
-# |---|---|---|
-# | Images (focus, saturation, illumination) | Good, no new imaging needed | All checks pass |
-# | Nuclei segmentation | **Must change** | 18 to 54% of objects are pieces of a nucleus |
-# | Cell outlines | **Must change** | Ragged, and they miss up to 46% of the AGP signal |
-# | Features | Fine | They will improve once the outlines improve |
-# | Biological signal | Present | TGFβ1 replicates, and the DMSO negative control passes |
-# 
-# ### Settings to change in `2_analysis.cppipe`
-# 
-# These are **starting values**. We chose them from the results above, but **we have not tested them in CellProfiler**.
-# 
-# | Module | Setting | Now | Try | Why |
-# |---|---|---|---|---|
-# | IdentifyPrimaryObjects | Typical diameter | 20, 80 | **30, 120** | Real nuclei reach about 100 pixels. The higher minimum also raises the automatic blur and spot distance from about 13 to about 20 pixels, so large nuclei are cut less often. |
-# | IdentifyPrimaryObjects | Method to distinguish clumped objects | Intensity | **Shape** | Uneven DNA staining creates false bright spots. Shape uses the outline, and most nuclei here are smooth and round. |
-# | IdentifyPrimaryObjects | Method to draw dividing lines | Intensity | **Shape** | Same reason. |
-# | IdentifySecondaryObjects | Method | Watershed - Gradient | **Propagation** | It should give smoother outlines. The pipeline already holds a regularization value of 0.05, which only Propagation uses. |
-# | IdentifySecondaryObjects | Threshold smoothing scale | 0 | **1.3488** | Without smoothing, the cell edge follows pixel noise. |
-# | IdentifySecondaryObjects | Threshold correction factor | 1.0 | **0.7, then 0.5** | A lower threshold includes the dim cytoplasm. If it adds too much background, try the log transform setting instead. |
-# 
-# **Trade-off of the new minimum diameter.** About 1 to 5% of objects, after joining, are smaller than 30 pixels. Some of them may be real small nuclei, not debris. If the new run loses too many, try a minimum of 25.
-# 
-# **Two notes on the current pipeline.**
-# 
-# - The note in IdentifyPrimaryObjects says "Otsu", but the setting is Minimum Cross-Entropy. We see no sign that this causes a problem, but the note should match the setting.
-# - "Maximum number of objects" is 500, with the setting "Continue". It sets no real limit: many sites have more than 500 nuclei.
-# 
-# ### How to test the new settings
-# 
-# 1. Run the new settings on a small test set. `project-data/test-images` is not enough on its own: it has only 2 wells per plate, and on the 1h plate these are CL1 wells (A02 and A03). Add CL2 wells, because CL2 has the largest problem. The wells in section 7.1 (I17, B22 and O17) are a good start.
-# 2. Compare the outlines by eye, as in section 7.1.
-# 3. Run the full plates when the outlines look right.
-# 4. Delete `data/qc-cache` and run this notebook again. The new run has passed when CL2 shows two clear DNA peaks, and the cut, AGP and solidity checks reach at least WARN.
-# 
-# ### Other actions, not in CellProfiler
-# 
-# - **Confirm the cell lines.** Find out which line is CL1 and which is CL2, and correct the `MDA-MB-231_wt_ko` value in the records.
-# - **Keep the exposure difference in mind.** Compare each well with the DMSO wells of its own plate, and never compare raw intensities with the 24h plate.
-# - **Check the 24h plate handling.** Find out why CL1 has patches with few cells on that plate.
-# - **Account for cell count** in the later analysis, and filter wells with few cells.
-# - **Check the TGFβ1 high-dose wells,** because their weak effect in CL2 is unexpected.
-# 
-# ### What this notebook cannot show
-# 
-# - Section 7.4 and the AGP check use 72 images from control wells, not all images. Treated wells may behave differently.
-# - Our test for a cut nucleus uses a shape rule, which can sometimes join two real, tightly touching nuclei.
-# - The AGP check assumes that dim red signal outside the outlines is cytoplasm. Someone who knows these cells should confirm this.
-# - We cannot separate cell line from plate side, or time from exposure, because of the plate layout and imaging settings.

@@ -224,3 +224,13 @@ _*
 
 # ignore large files
 data/
+results/
+report/
+
+# notebook results: large tables, caches and temporary files stay out of git
+notebooks/*/results/**/*.parquet
+notebooks/*/results/cache/
+notebooks/*/tmp/
+
+# ignore large log files
+*.log
