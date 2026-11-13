@@ -33,6 +33,8 @@ All results are in `results/`:
 | `tables/<notebook>/` | Summary tables as CSV, for example `tables/03.replicate-health-diagnosis/treatment_scores.csv` (one row per treatment, plate and cell line, with its 3 wells), `replicating_doses.csv` (which doses replicate) and `tables/02.explore-metadata/treatment_cell-count-and-activity.csv`, `design_treatments-and-doses.csv` and `imaging_settings.csv` |
 | `umap_qced_sc-sample.parquet`, `umap_qced_wells.parquet` | UMAP coordinates with metadata (notebook 01) |
 
+Notebook 03 also saves `figures/03.replicate-health-diagnosis/02b_map-negative-vs-positive-reference.png`: two panels (CL1 and CL2) plotting activity mAP against DMSO on x and against all three TGFβ1 doses on y, with colour for agent, shape for time and size for dose. The paired scores, permutation p/q-values and reference counts are in `tables/03.replicate-health-diagnosis/map_control_references.csv`. Higher scores mean distinguishability from the reference, not similarity or anticancer activity; the two axes have different chance baselines because their reference sets differ in size.
+
 ## Run
 
 Run one notebook at a time:
