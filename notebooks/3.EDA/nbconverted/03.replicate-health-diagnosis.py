@@ -361,144 +361,7 @@ print(
 )
 
 
-# ### mAP against negative and positive references
-# 
-# The two panels show **CL1** and **CL2** (their mapping to Panc1 and hPSC is not recorded). Each point is one compound or IL6 dose at one time point. Colour identifies the agent, shape the time point, and size the dose level.
-# 
-# - **x-axis:** activity mAP against DMSO, from the calculation above.
-# - **y-axis:** activity mAP against TGFβ1, calculated with the same cosine-distance method and 100,000 permutations. All three TGFβ1 doses form the positive-reference group (9 wells), within the same time point and cell line. DMSO and TGFβ1 are omitted as query points.
-# 
-# In both calculations, a query well retrieves its own treatment-and-dose replicates against the selected reference wells. **High mAP means reproducibly distinguishable from that reference; it does not mean similarity to the reference, reversal of its phenotype, or anticancer activity.** Low scores alone do not demonstrate similarity either. The axes use different numbers of reference wells (125–127 DMSO versus 9 TGFβ1), so their chance baselines differ: do not interpret the diagonal or subtract the two scores. The exported table includes reference counts and permutation p/q-values; TGFβ1-reference q-values are corrected across all 108 compound/IL6 tests. Existing DMSO activity calls retain their original correction across 126 tests.
-# 
-# TGFβ1 here is a biological perturbation reference. Spatial artifacts, particularly at 1h/4h in CL1, can affect both comparisons. These are separate-treatment comparisons, not a TGFβ1-plus-compound rescue experiment.
-
 # In[8]:
-
-
-# Keep the original DMSO scores and calculate a separate TGFβ1-reference result.
-# A boolean reference column lets mantispy use TGFβ1 without changing control labels.
-positive_reference_data = map_data[
-    (map_data.obs["Metadata_Perturbation"].astype(str) != "DMSO").to_numpy()
-].copy()
-positive_reference_data.obs["Metadata_TGFb1_reference"] = (
-    positive_reference_data.obs["Metadata_Perturbation"].astype(str).str.startswith("TGFb1_").to_numpy()
-)
-
-# The positive reference is only used for the mAP calculation, not for the null distribution.
-mt.tl.map(
-    positive_reference_data, mode="activity", label="Metadata_query", batch="Metadata_panel",
-    reference="Metadata_TGFb1_reference", distance="cosine", null_size=100_000,
-    seed=seed, n_jobs=n_threads, key_added="map_vs_TGFb1",
-)
-positive_reference_scores = read_map(
-    positive_reference_data.uns["mantispy"]["map_vs_TGFb1"]
-).with_columns(pl.col("time_point").cast(pl.Enum(plate_order))).rename({
-    "mAP": "mAP_vs_TGFb1", "mAP_pvalue": "mAP_vs_TGFb1_pvalue", "mAP_qvalue": "mAP_vs_TGFb1_qvalue",
-})
-
-# Count the number of reference wells for each plate and cell line, to report how many wells were used for each reference score.
-reference_counts = (
-    meta.group_by("Metadata_time_point", "Metadata_cell_line")
-    .agg(
-        (pl.col("agent") == "DMSO").sum().alias("n_DMSO_reference_wells"),
-        (pl.col("agent") == "TGFb1").sum().alias("n_TGFb1_reference_wells"),
-    )
-    .rename({"Metadata_time_point": "time_point", "Metadata_cell_line": "cell_line"})
-)
-
-# Combine the two reference scores into one table, for plotting and reporting.
-control_reference_scores = (
-    scores.filter(pl.col("agent") != "TGFb1")
-    .select(
-        "time_point", "cell_line", "perturbation", "agent", "dose", "dose_level", "n_wells", "wells",
-        pl.col("mAP").alias("mAP_vs_DMSO"),
-        pl.col("mAP_pvalue").alias("mAP_vs_DMSO_pvalue"),
-        pl.col("mAP_qvalue").alias("mAP_vs_DMSO_qvalue"),
-    )
-    .join(positive_reference_scores, on=["time_point", "cell_line", "perturbation"], how="left", validate="1:1")
-    .join(reference_counts, on=["time_point", "cell_line"], how="left", validate="m:1")
-    .sort("cell_line", "time_point", "agent", "dose_level")
-)
-
-# Check that all 108 compound/IL6 treatments have both reference scores, and save the table for reporting.
-if control_reference_scores.height != 108 or control_reference_scores.select(
-    pl.col("mAP_vs_DMSO", "mAP_vs_TGFb1").is_null().any()
-).row(0) != (False, False):
-    raise ValueError("Expected both reference scores for all 108 compound/IL6 tests")
-
-# Save the table for reporting.
-control_reference_scores.write_csv(table_dir / "map_control_references.csv")
-print(f"Paired reference scores: {control_reference_scores.height} treatment × dose × time × cell-line tests")
-
-# Plot the mAP scores against the negative and positive references, for each cell line and time point.
-query_agents = [agent for agent in agent_order if agent != "TGFb1"]
-reference_agent_colors = dict(zip(query_agents, sns.color_palette("colorblind", len(query_agents))))
-time_markers = {"1h": "o", "4h": "^", "24h": "s"}
-reference_dose_sizes = [10, 22, 40]
-
-# The two reference scores are plotted against each other, with the negative reference on the x-axis and the positive reference on the y-axis.
-# iterate over the two cell lines, and for each cell line iterate over the three time points, plotting the mAP scores for each treatment.
-fig, axes = plt.subplots(1, 2, figsize=(7.2, 4.0), sharex=True, sharey=True)
-for ax, line in zip(axes, line_order):
-    sub = control_reference_scores.filter(pl.col("cell_line") == line)
-    for agent in query_agents:
-        for time in plate_order:
-            points = sub.filter((pl.col("agent") == agent) & (pl.col("time_point") == time))
-
-            # plot the points for this agent and time point, with the color for the agent, 
-            # the marker for the time point, and the size for the dose level
-            ax.scatter(
-                points["mAP_vs_DMSO"].to_numpy(), points["mAP_vs_TGFb1"].to_numpy(),
-                c=[reference_agent_colors[agent]], marker=time_markers[time],
-                s=[reference_dose_sizes[level] for level in points["dose_level"]],
-                alpha=0.8, edgecolors="white", linewidths=0.5,
-            )
-
-    # setting the title, axis labels, limits, aspect ratio, and grid for the subplot
-    ax.set(title=f"{line} ({sub.height} tests)", xlabel="mAP against DMSO (negative reference)",
-           xlim=(-0.03, 1.03), ylim=(-0.03, 1.03))
-    ax.set_aspect("equal", adjustable="box")
-    ax.grid(alpha=0.18)
-
-# Add a label to the y-axis of the left subplot, since both subplots share the same y-axis.
-axes[0].set_ylabel("mAP against TGFβ1 (positive reference; all doses)")
-
-# creating legend handles for the agents, time points, and dose sizes
-agent_handles = [
-    Line2D([], [], marker="o", ls="", color=reference_agent_colors[agent], markersize=4.5, label=agent)
-    for agent in query_agents
-]
-time_handles = [
-    Line2D([], [], marker=time_markers[time], ls="", color="#666666", markersize=4.5, label=time)
-    for time in plate_order
-]
-dose_handles = [
-    Line2D([], [], marker="o", ls="", color="#999999", markersize=np.sqrt(size), label=label)
-    for size, label in zip(reference_dose_sizes, ["low dose", "medium dose", "high dose"])
-]
-
-# add a red diagonal line to indicate equal mAP against both references
-for ax in axes:
-    ax.plot([0, 1], [0, 1], ls="--", lw=0.8, color="#e34948", alpha=0.6, zorder=0)
-
-# set legend 
-fig.legend(handles=agent_handles, loc="lower center", bbox_to_anchor=(0.5, 0.075), ncol=6, frameon=False)
-fig.legend(handles=time_handles + dose_handles, loc="lower center", bbox_to_anchor=(0.5, 0.035), ncol=6, frameon=False)
-
-# set title 
-fig.suptitle("Treatment mAP against negative and positive references", y=0.98)
-
-# add a note about the interpretation of the axes
-fig.text(0.5, 0.015, "Higher scores = greater distinguishability from the reference; axes have different chance baselines.",
-         ha="center", fontsize=6.5)
-
-# adjust the subplots to make room for the legends and title
-fig.subplots_adjust(bottom=0.2, top=0.88, wspace=0.12)
-
-save_figure(fig, "02b_map-negative-vs-positive-reference")
-
-
-# In[9]:
 
 
 # one summary row per plate and cell line
@@ -519,7 +382,7 @@ panel_summary.write_csv(table_dir / "panel_summary.csv")
 panel_summary.with_columns(pl.selectors.float().round(1))
 
 
-# In[10]:
+# In[9]:
 
 
 # which doses replicate, per agent, plate and cell line ("–" = no dose)
@@ -541,7 +404,7 @@ replicating_doses.write_csv(table_dir / "replicating_doses.csv")
 replicating_doses
 
 
-# In[11]:
+# In[10]:
 
 
 # the wells behind each replicating treatment
@@ -553,7 +416,7 @@ scores.filter(pl.col("replicating")).sort(
 )
 
 
-# In[12]:
+# In[11]:
 
 
 # figure: summary of reproducibility and activity, with the DMSO checks
@@ -609,7 +472,7 @@ save_figure(fig, "02_reproducibility-summary")
 # 
 # **Pass if:** unusual DMSO wells are few and scattered, not grouped in one area of the plate.
 
-# In[13]:
+# In[12]:
 
 
 dmso_rows, unusual_profile, distance_limits = [], {}, {}
@@ -656,7 +519,7 @@ dmso_health.with_columns(pl.selectors.float().round(2))
 # 
 # We also give each well's cell count, its plate position, and its correlation with the unusual DMSO wells of 3a ("looks like unusual DMSO" when r ≥ 0.8), which helps to tell a technical problem from biology.
 
-# In[14]:
+# In[13]:
 
 
 health_rows = []
@@ -725,7 +588,7 @@ outliers.select(
 )
 
 
-# In[15]:
+# In[14]:
 
 
 # figure: the 3 replicate wells of each treatment, by distance from the DMSO centre
@@ -786,11 +649,11 @@ save_figure(fig, "04_replicate-spread-and-outliers")
 
 # ## 4. Phenotypic strength: how far is each treatment from DMSO?
 # 
-# **Strength** = distance of the consensus profile (median of the replicate wells) from the DMSO centre, divided by the typical distance of a set of 3 DMSO wells from the other DMSO wells (median of 2,000 random sets). A strength of 1 means "as far as 3 random DMSO wells"; 3 means three times further. We show it beside the **activity call** (mAP q < 0.05, section 2) and the cell count relative to DMSO. We also mark treatments whose consensus looks like the unusual DMSO wells of the same plate (r ≥ 0.8, section 3a).
+# **Strength** = distance of the consensus profile (median of the replicate wells) from the DMSO centre, divided by the typical distance of a set of 3 DMSO wells from the other DMSO wells (median of 2,000 random sets). A strength of 1 means "as far as 3 random DMSO wells"; 3 means three times further. We show it with the **activity call** (mAP q < 0.05, section 2). We also mark treatments whose consensus looks like the unusual DMSO wells of the same plate (r ≥ 0.8, section 3a).
 # 
-# **Pass if:** the positive control TGFb1 is active at least at 24h, and IL6 is not clearly active.
+# **Pass if:** every active treatment (mAP) is further from DMSO than a typical set of 3 random DMSO wells (strength above 1).
 
-# In[16]:
+# In[15]:
 
 
 strength_rows, set_typical = [], {}
@@ -825,7 +688,7 @@ scores = scores.join(
 ).with_columns((pl.col("corr_with_unusual_dmso") >= artifact_corr).fill_null(False).alias("looks_like_unusual_dmso"))
 
 
-# In[17]:
+# In[16]:
 
 
 # table: strength and activity of every treatment
@@ -843,7 +706,7 @@ strength_table.filter(pl.col("active") | pl.col("looks_like_unusual_dmso")).sele
 )
 
 
-# In[18]:
+# In[17]:
 
 
 # figure: strength heatmap per cell line (rows: treatment x dose, columns: time point)
@@ -874,21 +737,19 @@ strength_bar.set_label("strength: distance from DMSO / typical distance of 3 DMS
 save_figure(fig, "05_phenotypic-strength-heatmap")
 
 
-# **Result:**
+# **Result: PASS.** All 40 active treatments are further from DMSO than a typical set of 3 random DMSO wells (strength 1.2–9.7), and 33 of them lie beyond the 95th percentile of random DMSO sets.
 # 
 # - 40 of 126 tests are active (mAP q < 0.05): CBK600005 18 of 18, TGFβ1 9, CBK200566 6, CBK041498 4, CBK175924 3, CBK600008 0 and IL6 0 of 18.
 # - **CBK600005** is the strongest treatment: active at every dose, time and cell line (strength 3.3–9.7), strongest in CL2 at 24h (8.5–9.7). At 24h it also lowers the number of QC-passing cells to 35–54% (CL1) and 38–47% (CL2) of DMSO (`cell_ratio` in the table above; notebook 04 tests cell loss), so part of its effect may be toxicity.
-# - **TGFβ1 (positive control)** is active at all 3 doses in both cell lines at 24h (strength 2.3–3.4), and in CL2 already at 4h (2.5 and 10 ng/ml). In CL1 at 24h it also lowers the number of QC-passing cells to 45–51% of DMSO. Its high strength in CL1 at 1h (3.6 and 5.1) and 4h (4.4) comes with † (r = 0.91–0.98 with the unusual DMSO wells): this is mostly the plate-position effect. The only active test with † is TGFβ1 10 ng/ml at 4h in CL1.
+# - **TGFβ1** is active at all 3 doses in both cell lines at 24h (strength 2.3–3.4), and in CL2 already at 4h (2.5 and 10 ng/ml). In CL1 at 24h it also lowers the number of QC-passing cells to 45–51% of DMSO. Its high strength in CL1 at 1h (3.6 and 5.1) and 4h (4.4) comes with † (r = 0.91–0.98 with the unusual DMSO wells): this is mostly the plate-position effect. The only active test with † is TGFβ1 10 ng/ml at 4h in CL1.
 # - **IL6** is never active (strength 0.7–1.6), as expected. **CBK600008** is never active either (0.7–1.3).
 # - **CBK200566** is active at all doses in CL2 at 24h (3.5–6.5, cells 54–73% of DMSO), and at 2 mM in CL1 at 24h (3.2). **CBK041498** and **CBK175924** are active mainly at 2 mM, at 24h, and in CL2 also at 4h (CBK175924 2 mM in CL2 already at 1h).
 
 # ## 5. Dose and time
 # 
 # The strength heatmap above shows each agent across the 3 doses and 3 time points. To test for a **dose response**, we correlate the distance of each of the 9 wells (3 doses × 3 replicates, fewer when a well failed QC) from the DMSO centre with the dose rank (Spearman ρ), per plate and cell line, and correct for the 42 tests (Benjamini–Hochberg). Time and exposure settings cannot be separated, so a trend in time can also come from the longer ER and AGP exposures of the 24h plate.
-# 
-# **Pass if:** TGFb1 gets stronger with time.
 
-# In[19]:
+# In[18]:
 
 
 dose_rows = []
@@ -919,7 +780,7 @@ dose_response.filter(pl.col("pvalue") < 0.05).sort("agent", "cell_line", "time_p
 # 
 # We take the consensus profiles of the active treatments (mAP q < 0.05) and correlate every pair (Pearson r over all features). Treatments with a similar effect on the cells correlate strongly; the clustering puts them next to each other. Treatments marked † look like the unusual DMSO wells of their plate (section 3a).
 
-# In[20]:
+# In[19]:
 
 
 active = scores.filter(pl.col("active")).sort("agent", "cell_line", "time_point", "dose_level")
@@ -951,7 +812,7 @@ for r, a, b in pairs:
     print(f"  r = {r:.2f}: {a}  vs  {b}")
 
 
-# In[21]:
+# In[20]:
 
 
 # figure: clustered correlation heatmap of the active consensus profiles
@@ -986,7 +847,7 @@ save_figure(grid.figure, "07_active-treatment-similarity")
 # 
 # For the strongest active treatment of each agent and cell line (leaving out †), we average the absolute rescaled values of the consensus profile within each compartment × channel group (e.g. all cytoplasm ER features). Shape features have no channel; colocalization features use two channels.
 
-# In[22]:
+# In[21]:
 
 
 var = adata.var.reset_index()
@@ -1016,7 +877,7 @@ feature_groups.write_csv(table_dir / "feature_group_change_top_active.csv")
 print("features per group:", {g: int((group_of == g).sum()) for g in group_order})
 
 
-# In[23]:
+# In[22]:
 
 
 # figure: mean absolute change per compartment x channel for the strongest active treatments
@@ -1046,7 +907,7 @@ save_figure(fig, "08_feature-groups-strongest-treatments")
 # - No two different compounds look alike: the most similar pair of different agents reaches only r = 0.50 (CBK175924 2 mM 1h CL2 vs TGFβ1 10 ng/ml 24h CL2). TGFβ1 in CL2 shares part of its profile with CBK600005 at 24h in CL2 (median r = 0.42).
 # - Feature groups: CBK600005 at 24h changes nuclear DNA and AGP features most in CL2 (mean |change| 9.0 and 8.7) and cell and nuclear shape in CL1 (5.1); CBK200566 mainly DNA features (2.7 in CL1; nuclear DNA 5.6 and shape 5.0 in CL2); TGFβ1 mostly ER and AGP (2.7–3.2); CBK041498 and CBK175924 in CL2 mostly Mito (2.8–3.3). ER and AGP changes at 24h may partly reflect the longer exposures of that plate, although every comparison is against DMSO of the same plate.
 
-# In[24]:
+# In[23]:
 
 
 # the main table: one row per treatment x plate x cell line
@@ -1068,7 +929,7 @@ scores.sort("cell_line", "time_point", pl.col("perturbation").replace_strict({p:
 # - CL1 at 1h and 4h has a strong plate-position effect: 33 (1h) and 11 (4h) of 127 DMSO wells are shifted, all in odd rows of columns 1–6. At 24h, low-cell wells in rows M–N (both lines), columns 3–4 (CL1) and columns 20–22 (CL2) are shifted. These explain most outlier replicates and the apparent TGFβ1 effect in CL1 at 1h and 4h.
 # - 48 of 372 treated wells (13%) are outlier replicates, many in the shifted areas or with few cells.
 # - CBK600005 is active in all 18 tests (strength up to 9.7), flat across doses, and halves the cell count at 24h (35–54% of DMSO): strong effect, possibly with toxicity.
-# - TGFβ1 (positive control) is active at all doses at 24h in both lines and grows with time in CL2; no clean dose response (5 ng/ml strongest in CL2). IL6 and CBK600008 are never active.
+# - TGFβ1 is active at all doses at 24h in both lines and grows with time in CL2; no clean dose response (5 ng/ml strongest in CL2). IL6 and CBK600008 are never active.
 # - CBK200566 is strongly active in CL2 at 24h (all doses); CBK041498 and CBK175924 are active mainly at 2 mM.
 # - Doses of one compound share one profile; different compounds do not look alike (r ≤ 0.50); the two cell lines respond differently to the same treatment (e.g. r = 0.13 for CBK600005 at 24h).
 # 

@@ -8,7 +8,7 @@ Each notebook answers one question, so a result is shown in one place only:
 |---|---|
 | `01.batch-effects-diagnosis.ipynb` | What drives the differences between profiles: biology (cell line, time point, treatment) or technical effects? UMAPs of single cells and all wells (biology), then **batch effects on the DMSO wells only**: a UMAP of the DMSO wells, a plate map of how far each DMSO well is from the typical DMSO well, tests of each technical factor (plate area, cell number, plate edge, row = imaging order), a test for gradients across the plate, and the share of features that follow cell number. |
 | `02.explore-metadata.ipynb` | How the screen was set up and run: the plate layout (checked against the layout files), the imaging settings, imaging order and focus of each plate, and the cell counts on the plates and in the DMSO wells. |
-| `03.replicate-health-diagnosis.ipynb` | Do replicate wells agree, which treatments differ from DMSO (percent replicating, mAP), which replicate wells are outliers, how strong each treatment is across dose and time, and which treatments look alike. |
+| `03.replicate-health-diagnosis.ipynb` | Do replicate wells agree, which treatments differ from DMSO (percent replicating, mAP against DMSO only), which replicate wells are outliers, how strong each treatment is across dose and time, and which treatments look alike. |
 | `04.identify-cytotoxic-perts.ipynb` | Which treatments kill cells or stop their growth (cell count per well against DMSO; cytotoxic when the 3 wells are at least 3 robust SDs below DMSO), and do their profile changes look like DMSO wells with fewer cells? |
 
 ## Main findings
@@ -39,11 +39,9 @@ All results are in `results/`:
 | `figures/<notebook>/` | Every figure of each notebook, as PNG (300 dpi) and PDF, drawn at print size (full page width 7.2 in, text 6–9 pt) |
 | `tables/01.batch-effects-diagnosis/` | `well_distance-and-technical-factors.csv` (each well's distance from the typical DMSO well, cell number, plate area, distance to the edge and imaging time), `dmso_technical-factors.csv` (the tests on DMSO wells), `dmso_unusual-wells.csv`, `dmso_feature-vs-cell-number_spearman.csv` |
 | `tables/02.explore-metadata/` | `design_treatments-and-doses.csv`, `imaging_settings.csv`, `qc_pass_summary.csv`, `dmso_cell-count_summary.csv`, `dmso_edge-vs-inner.csv`, `well-qc_failing-wells.csv` |
-| `tables/03.replicate-health-diagnosis/` | `treatment_scores.csv` (one row per treatment, plate and cell line: replicate correlation, mAP, strength, flags), `replicating_doses.csv`, `outlier_replicates.csv`, `dose_response.csv`, `map_control_references.csv` (mAP against DMSO and against TGFβ1) |
+| `tables/03.replicate-health-diagnosis/` | `treatment_scores.csv` (one row per treatment, plate and cell line: replicate correlation, mAP, strength, flags), `replicating_doses.csv`, `outlier_replicates.csv`, `dose_response.csv` |
 | `tables/04.identify-cytotoxic-perts/` | `cytotoxicity_calls.csv`, `dmso_threshold.csv`, `cell-loss-and-density-likeness.csv` |
-| `umap_qced_sc-sample.parquet`, `umap_qced_wells.parquet` | UMAP coordinates with metadata (notebook 01) |
-
-Notebook 03 also saves `figures/03.replicate-health-diagnosis/02b_map-negative-vs-positive-reference.png`: two panels (CL1 and CL2) plotting activity mAP against DMSO on x and against all three TGFβ1 doses on y, with colour for agent, shape for time and size for dose. The paired scores, permutation p/q-values and reference counts are in `map_control_references.csv`. Higher scores mean distinguishability from the reference, not similarity or anticancer activity; the two axes have different chance baselines because their reference sets differ in size.
+| `umap_qced_sc-sample.parquet`, `umap_qced_wells.parquet`, `umap_qced_dmso-wells.parquet` | UMAP coordinates with metadata (notebook 01) |
 
 ## Run
 
