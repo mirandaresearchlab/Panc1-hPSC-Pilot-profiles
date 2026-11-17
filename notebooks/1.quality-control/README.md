@@ -4,7 +4,7 @@ Before we compare treatments, we check that the images and the single-cell profi
 
 | Notebook | What it does |
 |---|---|
-| `01.dataset-qc-report.ipynb` | A report on the whole dataset: are the CellProfiler outlines good enough? It grades the cell outlines, features and biological signal PASS, WARN or FAIL, in one scorecard. |
+| `01.dataset-qc-report.ipynb` | A report on the whole dataset: are the CellProfiler outlines good enough? It grades data completeness, lighting, cell outlines and features PASS, WARN or FAIL, in one scorecard. Cell counts on the plate, replicate agreement and the TGFβ1 positive control are tested on the QCed profiles in `3.EDA`. |
 | `02.qc.ipynb` | Checks every image and every cell, and adds two pass/fail columns: `Metadata_image_qc` (blurred or over-exposed images) and `Metadata_profile_qc` (bad cell outlines, found with coSMicQC). It then joins the 3 plates into one QC profile. |
 
 The two notebooks are independent and can run in either order.
@@ -30,7 +30,7 @@ All results are in `results/`.
 |---|---|---|
 | `qc_Panc1_hPSC_sc-profiles.parquet` | 02 | **The QC profile:** all 3 plates in one table, one row per cell, with all features. It adds the cell line, time point, treatment and both QC columns with their reasons. Keep the cells where `Metadata_image_qc` and `Metadata_profile_qc` are both `pass`. This is the input for preprocessing. |
 | `quality-scorecard.csv` | 01 | The value and grade of each dataset check, per plate and cell line. |
-| `cache/` | 01 | Saved results of slow steps. Delete this folder to compute them again. |
+| `cache/` | 01 | Saved results of slow steps (a sample of 100 cells per well, and the segmentation measurements on 72 control images). Delete this folder to compute them again. |
 
 ## Run
 

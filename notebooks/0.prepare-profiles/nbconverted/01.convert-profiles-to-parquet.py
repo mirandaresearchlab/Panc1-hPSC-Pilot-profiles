@@ -129,7 +129,8 @@ for plate, plate_header in headers.items():
         raise ValueError(f"{plate}: columns differ from the first plate")
 
 schema = {name: column_type(name) for name in header}
-print(pl.Series(list(schema.values())).value_counts(sort=True))
+# how many columns of each type
+pl.Series(list(schema.values())).value_counts(sort=True)
 
 
 # ## Convert
@@ -258,5 +259,5 @@ with duckdb.connect() as con:
             "parquet_GiB": round(parquet_path.stat().st_size / 2**30, 1),
         })
 
-print(pl.DataFrame(summary))
+pl.DataFrame(summary)
 

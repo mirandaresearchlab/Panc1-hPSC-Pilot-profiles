@@ -234,3 +234,4 @@ notebooks/*/tmp/
 
 # ignore large log files
 *.log
+.claude/

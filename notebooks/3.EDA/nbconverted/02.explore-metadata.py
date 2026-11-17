@@ -720,6 +720,71 @@ save_fig(fig, "07_dmso_cell-count-distribution")
 # In[15]:
 
 
+# Example images: the 4 CL1 DMSO wells at 24h with the fewest QC-passing cells (the dots near 0 in the right panel).
+# For each well, we show the field of view that lost the most cells.
+# Top: DNA stain, nucleus outline cyan = cell passes QC, red = cell removed by QC.
+# Bottom: Mito stain of the same field, yellow = pixels at the camera's maximum (image QC fails a field when > 1% of a channel's pixels are at the maximum).
+from PIL import Image
+from scipy import ndimage as ndi
+
+images_dir = pathlib.Path("../../../../project-data/PALS-screen-data").resolve(strict=True)
+low_wells = dmso.filter((pl.col("time_point") == "24h") & (pl.col("cell_line") == "CL1")).sort("n_cells_qc").head(4)
+plate = low_wells["Metadata_Plate"][0]
+masks_dir = pathlib.Path((imaging_dir / plate / "DONE").read_text().strip()) / "masks" / plate
+removed = (
+    pl.scan_parquet(sc_qc_path)
+    .select("Metadata_Plate", "Metadata_Well", "Metadata_Acquisition", "Metadata_ObjectNumber", "Metadata_image_qc",
+            "Metadata_image_qc_reason", "Metadata_profile_qc", "Metadata_profile_qc_reason")
+    .with_columns(pl.col(pl.Categorical).cast(pl.String))
+    .filter((pl.col("Metadata_Plate") == plate) & pl.col("Metadata_Well").is_in(low_wells["Metadata_Well"].implode()))
+    .collect()
+    .with_columns(
+        failed=(pl.col("Metadata_image_qc") == "fail") | (pl.col("Metadata_profile_qc") == "fail"),
+        # image QC first: a failed image removes every cell in it
+        reason=pl.when(pl.col("Metadata_image_qc") == "fail").then(pl.format("image QC, {}", "Metadata_image_qc_reason"))
+        .when(pl.col("Metadata_profile_qc") == "fail").then(pl.lit("profile QC (bad outline)")),
+    )
+)
+
+
+def scaled(image):
+    """Grey image scaled between its 1st and 99.8th percentile."""
+    low, high = np.percentile(image, [1, 99.8])
+    return np.dstack([np.clip((image - low) / (high - low), 0, 1)] * 3)
+
+
+fig, axes = plt.subplots(2, len(low_wells), figsize=(3.6 * len(low_wells), 8), layout="constrained")
+for column, well in enumerate(low_wells.iter_rows(named=True)):
+    in_well = removed.filter(pl.col("Metadata_Well") == well["Metadata_Well"])
+    site = in_well.group_by("Metadata_Acquisition").agg(pl.col("failed").sum()).sort("failed", "Metadata_Acquisition", descending=[True, False])["Metadata_Acquisition"][0]
+    in_site = in_well.filter(pl.col("Metadata_Acquisition") == site)
+    dna = np.array(Image.open(images_dir / plate / f"{site}_Fluorescence_405_nm_Ex.tiff")).astype(float)
+    mito = np.array(Image.open(images_dir / plate / f"{site}_Fluorescence_638_nm_Ex.tiff")).astype(float)
+    nuclei = np.array(Image.open(masks_dir / f"{site}_Nuclei.tiff")).astype(int)
+
+    top = scaled(dna)
+    edges = (ndi.grey_dilation(nuclei, size=5) != ndi.grey_erosion(nuclei, size=5)) & (nuclei > 0)
+    top[edges & np.isin(nuclei, in_site.filter(~pl.col("failed"))["Metadata_ObjectNumber"].to_numpy())] = (0, 0.9, 1)
+    top[edges & np.isin(nuclei, in_site.filter(pl.col("failed"))["Metadata_ObjectNumber"].to_numpy())] = (1, 0.15, 0.15)
+    bottom = scaled(mito)
+    saturated = mito >= 0.99 * 65535
+    bottom[ndi.binary_dilation(saturated, iterations=2)] = (1, 0.85, 0)
+
+    reasons = in_well.filter(pl.col("failed"))["reason"].value_counts(sort=True)
+    lines = "\n".join(f"{r['count']:,} cells: {r['reason']}" for r in reasons.head(2).iter_rows(named=True))
+    axes[0, column].imshow(top)
+    axes[0, column].set_title(f"{well['Metadata_Well']}: {well['n_cells_qc']:,} of {well['n_cells_all']:,} cells pass QC\n{lines}", fontsize=9, loc="left")
+    axes[1, column].imshow(bottom)
+    axes[1, column].set_title(f"Mito, same field: {100 * saturated.mean():.1f}% of pixels at the maximum", fontsize=9, loc="left")
+    for ax in axes[:, column]:
+        ax.axis("off")
+fig.suptitle("CL1 DMSO wells at 24h with the fewest QC-passing cells: one field of view each", fontsize=12)
+plt.show()
+
+
+# In[16]:
+
+
 # edge wells = the outer ring of the plate (row A or P, column 1 or 24)
 dmso = dmso.with_columns(
     position=pl.when(pl.col("Metadata_Row").is_in(["A", "P"]) | pl.col("col_idx").is_in([0, 23]))
@@ -761,7 +826,7 @@ for name, trend, label in [
         )
 
 
-# In[16]:
+# In[17]:
 
 
 fig, axes = plt.subplots(2, 3, figsize=(17, 8), layout="constrained", gridspec_kw={"width_ratios": [1.3, 1, 0.8]})
@@ -808,7 +873,7 @@ save_fig(fig, "08_dmso_position-effects")
 # 
 # **Pass if:** the positive control TGFb1 and the compounds give consistent changes across the 3 replicate wells.
 
-# In[17]:
+# In[18]:
 
 
 def random_dmso_sets(dmso_values, stat, n_draws=n_null_draws, size=3):
@@ -871,7 +936,7 @@ with pl.Config(tbl_rows=60, tbl_cols=12, float_precision=2, tbl_width_chars=200)
     )
 
 
-# In[18]:
+# In[19]:
 
 
 # heatmaps: rows = treatment and dose, columns = cell line and time point
@@ -915,7 +980,7 @@ fig.suptitle("Treatment effects on cell number and QC (* = FDR < 0.05 vs random 
 save_fig(fig, "09_treatment_cell-count-heatmap")
 
 
-# In[19]:
+# In[20]:
 
 
 # replicate wells per treatment: x = dose, y = log2 ratio, color = time point
@@ -970,7 +1035,7 @@ save_fig(fig, "10_treatment_cell-count-replicates")
 # 
 # **Pass if:** only a small share of features (say below 10%) strongly follows cell count.
 
-# In[20]:
+# In[21]:
 
 
 # feature matrix in the same row order as `wells`; clip extreme values (only matters for distances, not ranks)
@@ -1036,7 +1101,7 @@ category_share = (
 )
 
 
-# In[21]:
+# In[22]:
 
 
 fig, axes = plt.subplots(1, 2, figsize=(16, 5.5), layout="constrained", gridspec_kw={"width_ratios": [1.1, 1]})
@@ -1088,7 +1153,7 @@ save_fig(fig, "11_dmso_feature-count-correlation")
 # 
 # **Pass if:** active treatments are not simply the ones that changed cell number.
 
-# In[22]:
+# In[23]:
 
 
 def distance_from_dmso(matrix, mask_dmso):
@@ -1156,7 +1221,7 @@ with pl.Config(float_precision=2):
     print(link_table)
 
 
-# In[23]:
+# In[24]:
 
 
 fig, axes = plt.subplots(2, 3, figsize=(17, 9.5), layout="constrained", sharex=True)
@@ -1182,7 +1247,7 @@ fig.suptitle("Every well passing well QC: profile distance from DMSO vs cell num
 save_fig(fig, "12_wells_distance-vs-cell-count")
 
 
-# In[24]:
+# In[25]:
 
 
 # imaging order: do DMSO wells imaged later in the run sit further from the DMSO centre?
@@ -1208,7 +1273,7 @@ print(pl.DataFrame(order_rows).sort(pl.col("time_point").cast(pl.Enum(plate_orde
 # 
 # **Pass if:** active treatments that did not change cell number have a low likeness.
 
-# In[25]:
+# In[26]:
 
 
 # per plate and cell line: slope of each feature against log2 cell-count ratio in DMSO wells
@@ -1259,7 +1324,7 @@ with pl.Config(tbl_rows=60, tbl_cols=12, float_precision=2, tbl_width_chars=220)
     )
 
 
-# In[26]:
+# In[27]:
 
 
 markers = {"1h": "o", "4h": "s", "24h": "^"}

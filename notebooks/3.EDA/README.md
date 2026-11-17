@@ -1,22 +1,25 @@
 # 3. Screen assessment (EDA)
 
-This module looks at the preprocessed profiles to judge the pilot screen: what drives the differences between wells, how cell number plays a role, and how reproducible and strong each treatment is. It uses the QCed profiles of `2.preprocessing`, and leaves out the 4 wells that fail well QC (`Metadata_well_qc`, all on the 24h CL1 plate with fewer than 100 cells).
+This module looks at the preprocessed profiles to judge the pilot screen: what drives the differences between wells, which technical effects (batch effects) are in the data, and how reproducible, strong and toxic each treatment is. It uses the QCed profiles of `2.preprocessing`, and leaves out the 4 wells that fail well QC (`Metadata_well_qc`, all on the 24h CL1 plate with fewer than 100 cells).
+
+Each notebook answers one question, so a result is shown in one place only:
 
 | Notebook | Question |
 |---|---|
-| `01.batch-effects-diagnosis.ipynb` | What drives the differences between profiles: biology (cell line, time point, treatment) or technical effects (cell density, plate position)? UMAPs of single cells and wells, and a test on the DMSO wells. |
-| `02.explore-metadata.ipynb` | How the screen was set up and run: the plate layout of controls, ligands and compounds with their doses (checked against the layout files), the imaging settings, imaging order and focus of each plate, and the cell counts: plate maps, DMSO spread, treatment effects on cell number, and how much cell number drives the features. |
-| `03.replicate-health-diagnosis.ipynb` | Do replicate wells agree for each compound and dose, which treatments differ from DMSO (percent replicating, mAP), how effects depend on dose and time, and how compounds relate to each other. |
-| `04.identify-cytotoxic-perts.ipynb` | Which treatments kill cells or stop their growth? Cell count per well (from the single-cell profiles) compared with DMSO; a treatment is cytotoxic when its 3 wells are at least 3 robust SDs below DMSO. |
+| `01.batch-effects-diagnosis.ipynb` | What drives the differences between profiles: biology (cell line, time point, treatment) or technical effects? UMAPs of single cells and wells, a plate map of how far each DMSO well is from the typical DMSO well, tests of each technical factor (plate area, cell number, plate edge, imaging order) on the DMSO wells, and the share of features that follow cell number. |
+| `02.explore-metadata.ipynb` | How the screen was set up and run: the plate layout (checked against the layout files), the imaging settings, imaging order and focus of each plate, and the cell counts on the plates and in the DMSO wells. |
+| `03.replicate-health-diagnosis.ipynb` | Do replicate wells agree, which treatments differ from DMSO (percent replicating, mAP), which replicate wells are outliers, how strong each treatment is across dose and time, and which treatments look alike. |
+| `04.identify-cytotoxic-perts.ipynb` | Which treatments kill cells or stop their growth (cell count per well against DMSO; cytotoxic when the 3 wells are at least 3 robust SDs below DMSO), and do their profile changes look like DMSO wells with fewer cells? |
 
 ## Main findings
 
-- Cell line and time point drive the largest differences. Treatment effects are small, and grow with time: 32% of the 126 treatment tests differ from DMSO (mAP), most of them at 24h.
-- CBK600005 changes the cells at every time point and dose, already at the lowest dose; CBK200566 strongly in CL2 at 24h. CBK041498 and CBK175924 act mainly at 2 mM. TGFβ1 (positive control) is active at 24h in both cell lines. IL6 and CBK600008 show no effect.
-- Cytotoxic (≥ 3 robust SDs below DMSO): CBK600005 and CBK200566 in CL2 at 24h, at all doses (50–71% of DMSO cells). Nothing at 1h or 4h; in CL1 at 24h the DMSO wells vary too much to call the cell loss of CBK600005 and TGFβ1.
-- Cell number matters: CBK600005, CBK200566 (CL2) and probably TGFβ1 (CL1) lower it at 24h, and 23–59% of features follow cell number in DMSO wells.
-- Technical effects: uneven cell density on the 24h plate (CL1), and a shifted profile in every other row of columns 1–6 in CL1 at 1h and 4h, which points to liquid handling.
-- Design and imaging: one layout on all 3 plates, with CL2 repeating CL1; the layout files agree with the profiles. The 24h plate was imaged with longer ER and AGP exposures and a different Mito focus offset. Imaging order and focus do not explain the plate patterns.
+- **Biology:** cell line and time point drive the largest differences between single cells. Treatment effects are small and grow with time: 40 of 126 treatment tests differ from DMSO (mAP), most of them at 24h.
+- **Batch effect 1, plate area:** in CL1 at 1h, all 33 unusual DMSO wells (of 127) lie in the odd rows of columns 1–6; they are 3.7 times further from the typical DMSO well and form their own island in the well UMAP. The pattern is weaker at 4h (11 wells) and points to liquid handling.
+- **Batch effect 2, cell number:** DMSO wells with an unusual cell number differ more on every plate (rho 0.30–0.66), and 23–59% of features follow cell number. The 24h plate has low-count areas (CL1 columns 3–4 and rows M–N; CL2 rows L–N), most likely from seeding or handling.
+- **Not batch effects:** distance to the plate edge and imaging order (at 1h and 4h).
+- **Confounded by design:** time point with the imaging settings (longer ER and AGP exposures on the 24h plate), and cell line with plate half. All comparisons are made within one plate and cell line.
+- **Treatments:** CBK600005 changes the cells at every time point and dose; CBK200566 strongly in CL2 at 24h. CBK041498 and CBK175924 act mainly at 2 mM. TGFβ1 (positive control) is active at 24h in both cell lines. IL6 and CBK600008 show no effect.
+- **Cytotoxic** (≥ 3 robust SDs below DMSO): CBK600005 and CBK200566 in CL2 at 24h, at all doses (50–71% of DMSO cells). Nothing at 1h or 4h; in CL1 at 24h the DMSO wells vary too much to call the cell loss of CBK600005 and TGFβ1. The profile changes of the treatments that lose cells look partly like DMSO wells with fewer cells; CBK600005 at 1h and 4h does not.
 
 ## Input
 
@@ -32,18 +35,22 @@ All results are in `results/`:
 
 | Path | Content |
 |---|---|
-| `figures/<notebook>/` | Every figure of each notebook, as PNG (the report uses them) |
-| `tables/<notebook>/` | Summary tables as CSV, for example `tables/03.replicate-health-diagnosis/treatment_scores.csv` (one row per treatment, plate and cell line, with its 3 wells), `replicating_doses.csv` (which doses replicate), `tables/04.identify-cytotoxic-perts/cytotoxicity_calls.csv` (cytotoxic calls), `tables/02.explore-metadata/treatment_cell-count-and-activity.csv`, `design_treatments-and-doses.csv` and `imaging_settings.csv` |
+| `figures/<notebook>/` | Every figure of each notebook, as PNG (300 dpi) and PDF, drawn at print size (full page width 7.2 in, text 6–9 pt) |
+| `tables/01.batch-effects-diagnosis/` | `well_distance-and-technical-factors.csv` (each well's distance from the typical DMSO well, cell number, plate area, distance to the edge and imaging time), `dmso_technical-factors.csv` (the tests on DMSO wells), `dmso_unusual-wells.csv`, `dmso_feature-vs-cell-number_spearman.csv` |
+| `tables/02.explore-metadata/` | `design_treatments-and-doses.csv`, `imaging_settings.csv`, `qc_pass_summary.csv`, `dmso_cell-count_summary.csv`, `dmso_edge-vs-inner.csv`, `well-qc_failing-wells.csv` |
+| `tables/03.replicate-health-diagnosis/` | `treatment_scores.csv` (one row per treatment, plate and cell line: replicate correlation, mAP, strength, flags), `replicating_doses.csv`, `outlier_replicates.csv`, `dose_response.csv`, `map_control_references.csv` (mAP against DMSO and against TGFβ1) |
+| `tables/04.identify-cytotoxic-perts/` | `cytotoxicity_calls.csv`, `dmso_threshold.csv`, `cell-loss-and-density-likeness.csv` |
 | `umap_qced_sc-sample.parquet`, `umap_qced_wells.parquet` | UMAP coordinates with metadata (notebook 01) |
 
-Notebook 03 also saves `figures/03.replicate-health-diagnosis/02b_map-negative-vs-positive-reference.png`: two panels (CL1 and CL2) plotting activity mAP against DMSO on x and against all three TGFβ1 doses on y, with colour for agent, shape for time and size for dose. The paired scores, permutation p/q-values and reference counts are in `tables/03.replicate-health-diagnosis/map_control_references.csv`. Higher scores mean distinguishability from the reference, not similarity or anticancer activity; the two axes have different chance baselines because their reference sets differ in size.
+Notebook 03 also saves `figures/03.replicate-health-diagnosis/02b_map-negative-vs-positive-reference.png`: two panels (CL1 and CL2) plotting activity mAP against DMSO on x and against all three TGFβ1 doses on y, with colour for agent, shape for time and size for dose. The paired scores, permutation p/q-values and reference counts are in `map_control_references.csv`. Higher scores mean distinguishability from the reference, not similarity or anticancer activity; the two axes have different chance baselines because their reference sets differ in size.
 
 ## Run
 
-Run one notebook at a time:
+Run the notebooks in order: notebook 04 reads `treatment_scores.csv` of notebook 03.
 
 ```bash
-sbatch _run.sbatch 01.batch-effects-diagnosis.ipynb
+sbatch _run.sbatch                                   # all four, in order
+sbatch _run.sbatch 01.batch-effects-diagnosis.ipynb  # one notebook
 ```
 
-Notebook 01 loads 2 million cells (about 30 GB of memory, 4 minutes). Notebooks 02 and 03 use the well profiles only and take 1–3 minutes; notebook 04 reads only metadata columns and takes under a minute. `sbatch _run.sbatch` without a notebook name runs all four in order. Logs go to `logs/`.
+Notebook 01 loads 2 million cells (about 30 GB of memory, 5 minutes). Notebooks 02–04 use the well profiles and metadata columns only and take 1–3 minutes each. Logs go to `logs/`.
