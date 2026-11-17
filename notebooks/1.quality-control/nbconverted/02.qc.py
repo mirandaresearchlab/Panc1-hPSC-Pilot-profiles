@@ -124,7 +124,7 @@ plate_order = ["1h", "4h", "24h"]
 line_order = ["CL1", "CL2"]
 line_colors = {"CL1": "#6250d6", "CL2": "#eda100"}
 plate_colors = {"1h": "#2a78d6", "4h": "#eb6834", "24h": "#1baf7a"}
-limit_color = "#d03b3b"
+limit_color = "#e34948"
 guide_color = "#52514e"
 
 
@@ -135,11 +135,18 @@ def in_time_order(table):
     return table.sort("cell_line", order)
 
 
-sns.set_theme(style="ticks", context="notebook")
-plt.rcParams.update({"figure.dpi": 110, "axes.spines.top": False, "axes.spines.right": False})
+# figure style for print: figure sizes are the size on paper (7.2 in = full page width), text is 6-9 pt
+sns.set_theme(style="ticks")
+plt.rcParams.update({
+    "figure.dpi": 150, "savefig.dpi": 300, "savefig.bbox": "tight",
+    "font.family": "sans-serif", "font.sans-serif": ["Liberation Sans", "DejaVu Sans"],
+    "font.size": 7, "axes.titlesize": 8, "axes.labelsize": 7, "xtick.labelsize": 6, "ytick.labelsize": 6,
+    "legend.fontsize": 6.5, "legend.title_fontsize": 7, "figure.titlesize": 9,
+    "axes.linewidth": 0.6, "xtick.major.width": 0.6, "ytick.major.width": 0.6, "xtick.major.size": 2.5, "ytick.major.size": 2.5,
+    "axes.spines.top": False, "axes.spines.right": False, "legend.frameon": False, "pdf.fonttype": 42,
+})
 pl.Config.set_tbl_rows(40)
 pl.Config.set_tbl_cols(-1)
-pl.Config.set_tbl_width_chars(170)
 pl.Config.set_fmt_str_lengths(50)
 
 
@@ -229,7 +236,7 @@ if cells.select(key).is_duplicated().any():
     raise ValueError("Each row must be one cell: plate, image and object number must be unique")
 
 print(f"{cells.height:,} cells, no missing values in the 4 measurements")
-print(in_time_order(cells.group_by("plate", "cell_line").agg(pl.len().alias("cells"), pl.col("Metadata_Well").n_unique().alias("wells"))))
+in_time_order(cells.group_by("plate", "cell_line").agg(pl.len().alias("cells"), pl.col("Metadata_Well").n_unique().alias("wells")))
 
 
 # **Result: PASS.** 2,647,721 cells, none with missing values, and 190 wells per plate and cell line.
@@ -270,30 +277,27 @@ sites = (
 sites = sites.with_columns(
     *[(robust_z(f"Image_ImageQuality_PowerLogLogSlope_{ch}", ["plate", "cell_line"]) < blur_limit).alias(f"blurred_{ch}") for ch in channels]
 )
-print("Blurred images: in total, and per channel")
-print(
-    in_time_order(
-        sites.group_by("plate", "cell_line").agg(
-            pl.len().alias("images"),
-            pl.any_horizontal([f"blurred_{ch}" for ch in channels]).sum().alias("blurred"),
-            *[pl.col(f"blurred_{ch}").sum().alias(ch) for ch in channels],
-        )
-    )
-)
-
 focus = pl.concat(
     [sites.select("plate", pl.lit(ch).alias("channel"), pl.col(f"Image_ImageQuality_PowerLogLogSlope_{ch}").alias("focus")) for ch in channels]
 )
-fig, axes = plt.subplots(1, 5, figsize=(15, 3.4), sharey=True)
+fig, axes = plt.subplots(1, 5, figsize=(7.2, 2.0), sharey=True, layout="constrained")
 for ax, ch in zip(axes, channels):
     sns.boxplot(
         data=focus.filter(pl.col("channel") == ch).to_pandas(), x="plate", y="focus", hue="plate",
-        order=plate_order, palette=plate_colors, ax=ax, fliersize=1, legend=False,
+        order=plate_order, palette=plate_colors, ax=ax, fliersize=0.5, linewidth=0.6, legend=False,
     )
     ax.set(title=ch, xlabel="")
 axes[0].set_ylabel("Focus measure\n(lower = more blurred)")
-plt.tight_layout()
 plt.show()
+
+# blurred images: in total, and per channel
+in_time_order(
+    sites.group_by("plate", "cell_line").agg(
+        pl.len().alias("images"),
+        pl.any_horizontal([f"blurred_{ch}" for ch in channels]).sum().alias("blurred"),
+        *[pl.col(f"blurred_{ch}").sum().alias(ch) for ch in channels],
+    )
+)
 
 
 # **Result: 65 of 10,257 images are blurred (0–1.6% per plate and cell line).** Most are in CL2 at 24h (28) and CL1 at 1h (17), and most of them in the DNA, RNA or AGP channel. Focus is otherwise similar across plates. The examples in section 4 show that the focus measure also catches images with a large out-of-focus object or debris, and that a few flagged images look sharp at this zoom.
@@ -313,14 +317,12 @@ sites = sites.with_columns(
         for ch in channels
     ]
 )
-print("Over-exposed images: in total, and per channel")
-print(
-    in_time_order(
-        sites.group_by("plate", "cell_line").agg(
-            pl.len().alias("images"),
-            pl.any_horizontal([f"saturated_{ch}" for ch in channels]).sum().alias("over-exposed"),
-            *[pl.col(f"saturated_{ch}").sum().alias(ch) for ch in channels],
-        )
+# over-exposed images: in total, and per channel
+in_time_order(
+    sites.group_by("plate", "cell_line").agg(
+        pl.len().alias("images"),
+        pl.any_horizontal([f"saturated_{ch}" for ch in channels]).sum().alias("over-exposed"),
+        *[pl.col(f"saturated_{ch}").sum().alias(ch) for ch in channels],
     )
 )
 
@@ -357,17 +359,6 @@ cells = cells.join(sites.select("plate", "Metadata_Acquisition", "image_qc", "im
 if cells["image_qc"].null_count():
     raise ValueError("Some cells have no image QC result")
 
-print(
-    in_time_order(
-        cells.group_by("plate", "cell_line").agg(
-            pl.col("Metadata_Acquisition").n_unique().alias("images"),
-            pl.col("Metadata_Acquisition").filter(pl.col("image_qc") == "fail").n_unique().alias("failed images"),
-            pl.len().alias("cells"),
-            (pl.col("image_qc") == "fail").sum().alias("cells in failed images"),
-            (100 * (pl.col("image_qc") == "fail").mean()).round(2).alias("% of cells"),
-        )
-    )
-)
 failure_type = (
     pl.when((pl.col("blurred_channels") != "") & (pl.col("saturated_channels") != ""))
     .then(pl.lit("blurred and over-exposed"))
@@ -375,7 +366,6 @@ failure_type = (
     .then(pl.lit("blurred"))
     .otherwise(pl.lit("over-exposed"))
 )
-print(sites.filter(pl.col("image_qc") == "fail").group_by(failure_type.alias("failed images")).len().sort("len", descending=True))
 
 
 def read_tiff(path):
@@ -388,7 +378,7 @@ def show_images(title, examples, crop=600):
     if examples.is_empty():
         print(f"{title}: no images")
         return
-    fig, axes = plt.subplots(1, len(examples), figsize=(2.8 * len(examples), 3.2))
+    fig, axes = plt.subplots(1, len(examples), figsize=(1.8 * len(examples), 2.1))
     for ax, example in zip(np.atleast_1d(axes), examples.iter_rows(named=True)):
         channel = example["channel"]
         image = read_tiff(images_dir / plate_names[example["plate"]] / f"{example['Metadata_Acquisition']}_Fluorescence_{channel_wavelength[channel]}_nm_Ex.tiff")
@@ -399,8 +389,8 @@ def show_images(title, examples, crop=600):
         rgb[window >= 0.99 * 65535] = (1, 0, 0)
         ax.imshow(rgb)
         ax.axis("off")
-        ax.set_title(f"{example['plate']} {example['cell_line']}, {channel}\n{example['Metadata_Acquisition']}", fontsize=8)
-    fig.suptitle(title, x=0.01, ha="left", fontsize=11, fontweight="bold")
+        ax.set_title(f"{example['plate']} {example['cell_line']}, {channel}\n{example['Metadata_Acquisition']}", fontsize=5)
+    fig.suptitle(title, x=0.01, ha="left", fontsize=8, fontweight="bold")
     plt.tight_layout()
     plt.show()
 
@@ -421,6 +411,28 @@ over_exposed = over_exposed.with_columns(pl.col("saturated_channels").str.split(
 show_images("Failed: blurred", blurred)
 show_images("Passed: a sharp image of the same plate, cell line and channel", sharp)
 show_images("Failed: over-exposed (red = pixels at the camera's maximum)", over_exposed)
+
+
+# In[7]:
+
+
+# images and cells that fail image QC, per plate and cell line
+in_time_order(
+    cells.group_by("plate", "cell_line").agg(
+        pl.col("Metadata_Acquisition").n_unique().alias("images"),
+        pl.col("Metadata_Acquisition").filter(pl.col("image_qc") == "fail").n_unique().alias("failed images"),
+        pl.len().alias("cells"),
+        (pl.col("image_qc") == "fail").sum().alias("cells in failed images"),
+        (100 * (pl.col("image_qc") == "fail").mean()).round(2).alias("% of cells"),
+    )
+)
+
+
+# In[8]:
+
+
+# why the images fail
+sites.filter(pl.col("image_qc") == "fail").group_by(failure_type.alias("failed images")).len().sort("len", descending=True)
 
 
 # **Result: 193 images fail (128 over-exposed, 48 blurred, 17 both). They hold 38,999 cells, 1.5% of all cells.**
@@ -445,7 +457,7 @@ show_images("Failed: over-exposed (red = pixels at the camera's maximum)", over_
 # 
 # coSMicQC checks the outlines of all cells, including those in failed images.
 
-# In[7]:
+# In[9]:
 
 
 def flag_cells(table, rules, group_columns):
@@ -470,14 +482,12 @@ print(cells.select(*condition_names, "failed_qc").mean().with_columns(pl.all() *
 # 
 # In the paper, 4–38% of cells failed. We also expect more failures in crowded wells.
 
-# In[8]:
+# In[10]:
 
 
 rates = in_time_order(
     cells.group_by("plate", "cell_line").agg(pl.len().alias("cells"), *[(pl.col(name).mean() * 100).round(1) for name in [*condition_names, "failed_qc"]])
 )
-print(rates)
-
 overlap = (
     cells.with_columns(pl.sum_horizontal(condition_names).alias("n_failed"))
     .group_by("cell_line", "n_failed")
@@ -485,9 +495,8 @@ overlap = (
     .with_columns((100 * pl.col("len") / pl.col("len").sum().over("cell_line")).round(1).alias("percent"))
     .sort("cell_line", "n_failed")
 )
-print(overlap)
 
-fig, axes = plt.subplots(1, 3, figsize=(13, 3.6), sharey=True)
+fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.2), sharey=True, layout="constrained")
 width = 0.38
 for ax, name in zip(axes, condition_names):
     for offset, line in zip((-width / 2, width / 2), line_order):
@@ -495,9 +504,16 @@ for ax, name in zip(axes, condition_names):
         ax.bar(np.arange(3) + offset, values, width * 0.92, color=line_colors[line], label=line)
     ax.set(title=condition_titles[name], xticks=range(3), xticklabels=plate_order, xlabel="Plate")
 axes[0].set_ylabel("Cells that fail (%)")
-axes[0].legend(frameon=False, title="Cell line")
-plt.tight_layout()
+axes[0].legend(title="Cell line")
 plt.show()
+rates
+
+
+# In[11]:
+
+
+# how many of the 3 conditions each cell fails
+overlap
 
 
 # **Result: in the expected range.** 19.7–25.3% of cells fail. Condition 3 flags the most (15.6–19.7%), condition 1 flags 4.1–7.0%, and condition 2 flags 8.0–8.9%. Crowded wells do not fail more.
@@ -507,10 +523,8 @@ plt.show()
 # Conditions 1 and 3 flag high DNA. A healthy G2 cell has twice the DNA of a G1 cell, so a limit below 2 times the G1 peak flags healthy cells.
 # 
 # **Pass if:** the condition 1 limit lies above 2 times the G1 peak.
-# 
-# **Reading the DNA plots:** G1 and G2 mark one and two DNA sets. 3× is most likely a G1 and a G2 nucleus merged into one outline; 4× is two G2 nuclei merged, or one polyploid nucleus. Objects below 0.7 times G1 are pieces of nuclei or debris.
 
-# In[9]:
+# In[12]:
 
 
 def first_peak(values):
@@ -539,7 +553,6 @@ for time in plate_order:
             }
         )
 peaks = pl.DataFrame(rows)
-print(peaks.select("plate", "cell_line", pl.col("^.*vs_first_peak$").round(2)))
 
 cells = cells.join(peaks.select("plate", "cell_line", "first_peak"), on=["plate", "cell_line"]).with_columns(
     (pl.col(nucleus_dna) / pl.col("first_peak")).alias("dna_vs_first_peak")
@@ -553,31 +566,13 @@ def label_dna_peaks(ax):
     """Mark the expected DNA peaks, and the region of pieces and debris, at the top of a panel."""
     ax.set_ylim(0, ax.get_ylim()[1] * 1.25)
     for position, label in dna_peaks.items():
-        ax.axvline(position, color=guide_color, ls=":", lw=0.9)
-        ax.text(position, 0.98, label, transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=8, color=guide_color, backgroundcolor="white")
-    ax.text(-1.8, 0.98, "pieces,\ndebris", transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=8, color=guide_color)
+        ax.axvline(position, color=guide_color, ls=":", lw=0.6)
+        ax.text(position, 0.98, label, transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=5.5, color=guide_color)
+    ax.text(-1.8, 0.98, "pieces,\ndebris", transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=5.5, color=guide_color)
 
 
-fig, axes = plt.subplots(2, 3, figsize=(13, 5.6), sharex=True)
 bins = np.arange(-3, 3.2, 0.05)
-for row, line in enumerate(line_order):
-    for column, time in enumerate(plate_order):
-        ax = axes[row, column]
-        values = np.log2(cells.filter((pl.col("plate") == time) & (pl.col("cell_line") == line))["dna_vs_first_peak"].to_numpy())
-        limit = peaks.filter((pl.col("plate") == time) & (pl.col("cell_line") == line))["condition_1_limit_vs_first_peak"].item()
-        ax.hist(values, bins=bins, histtype="step", lw=1.8, color=line_colors[line])
-        ax.axvline(np.log2(limit), color=limit_color, lw=1.8, label="Condition 1 limit")
-        label_dna_peaks(ax)
-        ax.set_title(f"{line}, {time}", fontsize=11)
-        ax.set_yticks([])
-for ax in axes[1]:
-    ax.set_xlabel("Total DNA, log2, relative to the first peak")
-for ax in axes[:, 0]:
-    ax.set_ylabel("Number of objects")
-plt.tight_layout()
-# one legend above the top-left panel, so it never covers the data or the peak labels
-fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="lower left", bbox_to_anchor=(0.01, 1.0), ncol=3, frameon=False, fontsize=9)
-plt.show()
+peaks.select("plate", "cell_line", pl.col("^.*vs_first_peak$").round(2))
 
 
 # **Result: PASS for condition 1, but not for condition 3 in CL2.**
@@ -597,7 +592,7 @@ plt.show()
 # | Second peak (1.6–2.5) | Healthy G2 cells |
 # | Too much (above 2.8) | Merged nuclei |
 
-# In[10]:
+# In[13]:
 
 
 cells = cells.with_columns(
@@ -618,8 +613,12 @@ dna_groups = in_time_order(
     .agg((100 * pl.col("failed_qc").mean()).round(1).alias("failed"))
     .pivot(on="dna_group", index=["cell_line", "plate"], values="failed", sort_columns=True)
 )
-print("Share of cells that fail QC (%)")
-print(dna_groups)
+# share of cells that fail QC (%), per DNA group
+dna_groups
+
+
+# In[14]:
+
 
 shares = in_time_order(
     cells.group_by("cell_line", "plate", "dna_group")
@@ -627,8 +626,12 @@ shares = in_time_order(
     .with_columns((100 * pl.col("len") / pl.col("len").sum().over("cell_line", "plate")).round(1).alias("percent"))
     .pivot(on="dna_group", index=["cell_line", "plate"], values="percent", sort_columns=True)
 )
-print("Share of all cells in each DNA group (%)")
-print(shares)
+# share of all cells in each DNA group (%)
+shares
+
+
+# In[15]:
+
 
 # which condition fails the cells of the second peak?
 second_peak = in_time_order(
@@ -636,8 +639,12 @@ second_peak = in_time_order(
     .group_by("cell_line", "plate")
     .agg(pl.len().alias("cells"), *[(pl.col(name).mean() * 100).round(1) for name in condition_names])
 )
-print("Cells in the second peak: share that fail each condition (%)")
-print(second_peak)
+# cells in the second peak: share that fail each condition (%)
+second_peak
+
+
+# In[16]:
+
 
 # which condition fails the objects with too much DNA (likely merged nuclei)?
 too_much = in_time_order(
@@ -645,8 +652,8 @@ too_much = in_time_order(
     .group_by("cell_line", "plate")
     .agg(pl.len().alias("cells"), *[(pl.col(name).mean() * 100).round(1) for name in condition_names])
 )
-print("Cells with too much DNA: share that fail each condition (%)")
-print(too_much)
+# cells with too much DNA: share that fail each condition (%)
+too_much
 
 
 # **Result: PASS for CL1, FAIL for CL2 G2 cells.**
@@ -660,7 +667,7 @@ print(too_much)
 # 
 # Eight random control cells per group. Yellow = nucleus outline, magenta = cell outline.
 
-# In[11]:
+# In[17]:
 
 
 def plate_masks(time):
@@ -677,7 +684,7 @@ def edge_of(mask):
 
 def show_examples(groups, n_columns=8, half=80):
     """Draw random cells from each named group: one row per group."""
-    fig, axes = plt.subplots(len(groups), n_columns, figsize=(1.45 * n_columns, 1.55 * len(groups)))
+    fig, axes = plt.subplots(len(groups), n_columns, figsize=(7.2, 1.0 * len(groups)))
     for row, (title, selection) in enumerate(groups.items()):
         # a fixed row order, so that the random examples are the same in every run
         picks = selection.sort("plate", "Metadata_Acquisition", "Metadata_ObjectNumber").sample(n=min(n_columns, selection.height), seed=seed)
@@ -685,7 +692,7 @@ def show_examples(groups, n_columns=8, half=80):
             ax = axes[row, column]
             ax.axis("off")
             if column == 0:
-                ax.text(0, 1.04, f"{title} ({selection.height:,} cells)", transform=ax.transAxes, fontsize=9, fontweight="bold")
+                ax.text(0, 1.04, f"{title} ({selection.height:,} cells)", transform=ax.transAxes, fontsize=6.5, fontweight="bold")
             if column >= picks.height:
                 continue
             cell = picks.row(column, named=True)
@@ -703,7 +710,7 @@ def show_examples(groups, n_columns=8, half=80):
             rgb[edge_of(nuclei[window] == number)] = (1, 0.85, 0)
             ax.imshow(rgb)
     # fixed spacing: tight_layout shrinks the images to fit the long row titles
-    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.9, wspace=0.08, hspace=0.35)
+    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.02, top=0.9, wspace=0.06, hspace=0.3)
     plt.show()
 
 
@@ -729,40 +736,17 @@ show_examples(
 # 
 # ## 10. Do the DNA peaks survive QC?
 # 
-# **Pass if:** removing the failed cells removes the objects outside the peaks, and keeps both peaks.
+# **Pass if:** removing the failed cells removes the objects outside the peaks, and keeps both peaks. The DNA curves are in section 12, next to the final rule.
 
-# In[12]:
+# In[18]:
 
 
-fig, axes = plt.subplots(2, 3, figsize=(13, 5.6), sharex=True)
-for row, line in enumerate(line_order):
-    for column, time in enumerate(plate_order):
-        ax = axes[row, column]
-        group = cells.filter((pl.col("plate") == time) & (pl.col("cell_line") == line))
-        before = np.log2(group["dna_vs_first_peak"].to_numpy())
-        after = np.log2(group.filter(~pl.col("failed_qc"))["dna_vs_first_peak"].to_numpy())
-        ax.hist(before, bins=bins, histtype="step", lw=1.2, color=guide_color, label="All objects")
-        ax.hist(after, bins=bins, histtype="step", lw=2, color=line_colors[line], label="Objects that pass QC")
-        label_dna_peaks(ax)
-        ax.set_title(f"{line}, {time}", fontsize=11)
-        ax.set_yticks([])
-for ax in axes[1]:
-    ax.set_xlabel("Total DNA, log2, relative to the first peak")
-for ax in axes[:, 0]:
-    ax.set_ylabel("Number of objects")
-plt.tight_layout()
-# one legend above the top-left panel, so it never covers the data or the peak labels
-fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="lower left", bbox_to_anchor=(0.01, 1.0), ncol=3, frameon=False, fontsize=9)
-plt.show()
-
-print(
-    in_time_order(cells.group_by("cell_line", "plate").agg(
-        (100 * (pl.col("dna_vs_first_peak") < 0.7).mean()).round(1).alias("too_little_dna_before"),
-        (100 * (pl.col("dna_vs_first_peak") < 0.7).filter(~pl.col("failed_qc")).mean()).round(1).alias("too_little_dna_after"),
-        (100 * pl.col("dna_vs_first_peak").is_between(1.6, 2.5).mean()).round(1).alias("second_peak_before"),
-        (100 * pl.col("dna_vs_first_peak").is_between(1.6, 2.5).filter(~pl.col("failed_qc")).mean()).round(1).alias("second_peak_after"),
-    ))
-)
+in_time_order(cells.group_by("cell_line", "plate").agg(
+    (100 * (pl.col("dna_vs_first_peak") < 0.7).mean()).round(1).alias("too_little_dna_before"),
+    (100 * (pl.col("dna_vs_first_peak") < 0.7).filter(~pl.col("failed_qc")).mean()).round(1).alias("too_little_dna_after"),
+    (100 * pl.col("dna_vs_first_peak").is_between(1.6, 2.5).mean()).round(1).alias("second_peak_before"),
+    (100 * pl.col("dna_vs_first_peak").is_between(1.6, 2.5).filter(~pl.col("failed_qc")).mean()).round(1).alias("second_peak_after"),
+))
 
 
 # **Result: PASS for CL1, FAIL for CL2.** In CL1, the extra peaks at 3 and 4 DNA sets disappear, and the G1 and G2 peaks stay. In CL2, the upper half of the G2 peak disappears (from 23–28% to 14–21% of objects), which would bias any cell-cycle result.
@@ -771,7 +755,7 @@ print(
 # 
 # We repeat the analysis with the panel A limits (1.15 and -1.16), and with z-scores over the whole plate.
 
-# In[13]:
+# In[19]:
 
 
 versions = {
@@ -789,7 +773,7 @@ for version, table in versions.items():
         (100 * pl.col("failed_qc").filter(pl.col("dna_group") == "3 second peak").mean()).round(1).alias("second_peak_failed"),
     )
     rows.append(summary.with_columns(pl.lit(version).alias("version")))
-print(pl.concat(rows).select("version", pl.exclude("version")).sort("cell_line", "version"))
+pl.concat(rows).select("version", pl.exclude("version")).sort("cell_line", "version")
 
 
 # **Result: no.** With all three choices, half or more of the CL2 G2 cells fail (51–64%), and under 12% of the CL1 G2 cells fail.
@@ -799,8 +783,10 @@ print(pl.concat(rows).select("version", pl.exclude("version")).sort("cell_line",
 # Sections 8–10 lead to one rule per cell line: **CL1 uses all 3 conditions; CL2 uses conditions 1 and 2**, because condition 3 flags healthy G2 cells in CL2. A cell **fails** if it fails a condition of its cell line's rule. It gets `fail` in `Metadata_profile_qc`, and `Metadata_profile_qc_reason` says why.
 # 
 # **Pass if:** the rule removes most objects with too much DNA, keeps the G2 peak in both cell lines, and fails treated cells at a rate close to DMSO.
+# 
+# **Reading the DNA plot:** grey = all objects; dashed red = objects that pass all 3 conditions (section 10); solid = objects that pass the rule of the cell line (in CL1 the rule uses all 3 conditions, so the two lines are the same). G1 and G2 mark one and two DNA sets. 3× is most likely a G1 and a G2 nucleus merged into one outline; 4× is two G2 nuclei merged, or one polyploid nucleus. Objects below 0.7 times G1 are pieces of nuclei or debris.
 
-# In[14]:
+# In[20]:
 
 
 remove = pl.lit(False)
@@ -827,27 +813,37 @@ removed = in_time_order(
         *[(100 * pl.col("remove").filter(pl.col("dna_group") == group).mean()).round(1).alias(f"removed, {group[2:]}") for group in dna_group_names],
     )
 )
-print("Cells marked for removal (%)")
-print(removed)
 
-fig, axes = plt.subplots(2, 3, figsize=(13, 5.6), sharex=True)
+# DNA content of all objects, of the objects that pass all 3 conditions (section 10), and of the objects that pass the rule
+fig, axes = plt.subplots(2, 3, figsize=(7.2, 3.8), sharex=True, layout="constrained")
 for row, line in enumerate(line_order):
     for column, time in enumerate(plate_order):
         ax = axes[row, column]
         group = cells.filter((pl.col("plate") == time) & (pl.col("cell_line") == line))
-        ax.hist(np.log2(group["dna_vs_first_peak"].to_numpy()), bins=bins, histtype="step", lw=1.2, color=guide_color, label="All objects")
-        ax.hist(np.log2(group.filter(~pl.col("remove"))["dna_vs_first_peak"].to_numpy()), bins=bins, histtype="step", lw=2, color=line_colors[line], label="Objects that pass profile QC")
+        ax.hist(np.log2(group["dna_vs_first_peak"].to_numpy()), bins=bins, histtype="step", lw=0.8, color=guide_color)
+        ax.hist(np.log2(group.filter(~pl.col("failed_qc"))["dna_vs_first_peak"].to_numpy()), bins=bins, histtype="step", lw=0.9, ls="--", color=limit_color)
+        ax.hist(np.log2(group.filter(~pl.col("remove"))["dna_vs_first_peak"].to_numpy()), bins=bins, histtype="step", lw=1.1, color=line_colors[line])
         label_dna_peaks(ax)
-        ax.set_title(f"{line}, {time}", fontsize=11)
+        ax.set_title(f"{line}, {time}")
         ax.set_yticks([])
 for ax in axes[1]:
     ax.set_xlabel("Total DNA, log2, relative to the first peak")
 for ax in axes[:, 0]:
     ax.set_ylabel("Number of objects")
-plt.tight_layout()
-# one legend above the top-left panel, so it never covers the data or the peak labels
-fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="lower left", bbox_to_anchor=(0.01, 1.0), ncol=3, frameon=False, fontsize=9)
+fig.legend(
+    handles=[plt.Line2D([], [], color=guide_color, lw=0.8, label="all objects"),
+             plt.Line2D([], [], color=limit_color, lw=0.9, ls="--", label="pass all 3 conditions"),
+             *[plt.Line2D([], [], color=line_colors[l], lw=1.1, label=f"pass the {l} rule") for l in line_order]],
+    loc="lower center", bbox_to_anchor=(0.5, -0.07), ncols=4,
+)
 plt.show()
+
+# cells marked for removal (%)
+removed
+
+
+# In[21]:
+
 
 # compare each treatment with the control wells of the same plate and cell line
 by_treatment = (
@@ -861,25 +857,26 @@ shift = (
     .join(control_removed, on=["plate", "cell_line"])
     .with_columns((pl.col("removed") - pl.col("control_removed")).alias("difference"))
 )
-print(shift.select(pl.col("difference").abs().median().round(1).alias("median_size"), pl.col("difference").abs().max().round(1).alias("largest_size")))
-print(shift.sort(pl.col("difference").abs(), descending=True).head(6).select("plate", "cell_line", "treatment", "cells", pl.col("removed").round(1), pl.col("control_removed").round(1), pl.col("difference").round(1)))
+print(f"difference from DMSO (points): median {shift['difference'].abs().median():.1f}, largest {shift['difference'].abs().max():.1f}")
+shift.sort(pl.col("difference").abs(), descending=True).head(6).select("plate", "cell_line", "treatment", "cells", pl.col("removed").round(1), pl.col("control_removed").round(1), pl.col("difference").round(1))
 
 
-# In[15]:
+# In[22]:
 
 
 # example cells for each cell line: random control cells that pass or fail profile QC
 control = cells.filter(pl.col("well_type") == "control")
-for line in line_order:
-    in_line = control.filter(pl.col("cell_line") == line)
-    show_examples({f"{line}: pass": in_line.filter(pl.col("profile_qc") == "pass"), f"{line}: fail": in_line.filter(pl.col("profile_qc") == "fail")})
+show_examples({
+    f"{line}: {qc}": control.filter((pl.col("cell_line") == line) & (pl.col("profile_qc") == qc))
+    for line in line_order for qc in ["pass", "fail"]
+})
 
 
 # **Result: PASS, with one treatment to check.**
 # 
 # - Profile QC fails 19.7–23.4% of CL1 cells and 10.6–11.6% of CL2 cells.
 # - **Merged nuclei fail:** 73.5–100% of CL1 and 77.9–86.7% of CL2 objects with too much DNA. At 24h, some CL1 objects at 3 DNA sets still pass.
-# - **The G2 peak stays in both lines:** the rule fails 5.4–12.2% of CL2 G2 cells, against 45.8–54.0% with all 3 conditions.
+# - **The G2 peak stays in both lines:** the rule fails 5.4–12.2% of CL2 G2 cells, against 45.8–54.0% with all 3 conditions (the dashed red line loses the upper half of the CL2 G2 peak).
 # - **Example cells:** most failed cells hold two or more nuclei in one outline, or a nucleus with a ragged outline. Passed cells mostly have one nucleus with a clean outline. In CL1, a few failed cells look like single large nuclei (most likely two nuclei on top of each other, or a polyploid cell).
 # - Treated cells fail at a rate close to DMSO (median difference 0.6 points). The exception is **CBK600005 at 24h in CL2** (25.9% against 10.9%); check these wells before filtering.
 # 
@@ -898,7 +895,7 @@ for line in line_order:
 # 
 # **Pass if:** the QC profile has one row per cell of the 3 plates, and every cell has both QC results.
 
-# In[16]:
+# In[23]:
 
 
 keys = ["Metadata_Plate", "Metadata_Acquisition", "Metadata_ObjectNumber"]
@@ -954,7 +951,7 @@ if qc_summary.select(pl.col("Metadata_image_qc", "Metadata_profile_qc").null_cou
     raise ValueError("Some cells have no QC result")
 
 print(f"{qc_profile_path.name}: {qc_summary['len'].sum():,} cells, {len(schema):,} columns, {qc_profile_path.stat().st_size / 2**30:.1f} GiB")
-print(
+(
     qc_summary.group_by("Metadata_cell_line", "Metadata_time_point")
     .agg(
         pl.col("len").sum().alias("cells"),

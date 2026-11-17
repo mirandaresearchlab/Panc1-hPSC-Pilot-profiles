@@ -3,7 +3,7 @@
 
 # # Dataset QC report: are the CellProfiler outlines good enough?
 # 
-# This report checks the whole dataset at once: the cell outlines, the features and the biological signal. Each check gets a grade, and the scorecard in section 10 collects them. Notebook 02 (`02.qc.ipynb`) then checks each image and each cell, and marks the ones to remove.
+# This report checks the whole dataset at once: the images, the cell outlines and the features. Each check gets a grade, and the scorecard in section 8 collects them. Notebook 02 (`02.qc.ipynb`) then checks each image and each cell, and marks the ones to remove.
 # 
 # **Question:** are the CellProfiler outlines good enough to use these single-cell profiles, or should we run CellProfiler again with other settings?
 # 
@@ -11,9 +11,11 @@
 # 
 # - **Lighting is even** across each image. Blurred and over-exposed images are flagged one by one in notebook 02 (`02.qc.ipynb`).
 # - **Nuclei are not cut into pieces.** Only 0.2–0.4% (CL1) and 2.0–3.1% (CL2) of nuclei hold too little DNA, and both cell lines show the expected G1 and G2 DNA peaks.
-# - **CL1 has merged nuclei.** 14–28% of CL1 objects hold more DNA than one nucleus can. The scorecard does not test for this; section 7.3 shows it, and notebook 02 flags these cells.
+# - **CL1 has merged nuclei.** 14–28% of CL1 objects hold more DNA than one nucleus can. The scorecard does not test for this; section 6.3 shows it, and notebook 02 flags these cells.
 # - **Cell outlines are mostly good.** They hold 80–91% of the cell-body stain. CL2 outlines are slightly ragged at 1h and 4h.
-# - **The profiles carry biology.** 19–52% of treatments give reproducible profiles, and this rises with time. TGFβ1 changes the cells more over time, as expected.
+# - **Features are usable.** All 3,041 features have at most 0.1% missing values, and none is constant.
+# 
+# Cell numbers across the plate, replicate agreement and the TGFβ1 positive control are tested on the QCed profiles in `3.EDA` (notebooks 02, 03 and 01).
 # 
 # | Term | Meaning |
 # |---|---|
@@ -50,9 +52,6 @@ from matplotlib.colors import LinearSegmentedColormap
 from PIL import Image
 from scipy import ndimage as ndi
 from scipy.spatial import ConvexHull
-from sklearn.decomposition import PCA
-from statsmodels.stats.multitest import multipletests
-from statsmodels.stats.proportion import proportion_confint
 
 
 # In[2]:
@@ -85,11 +84,18 @@ channel_wavelength = {"DNA": 405, "RNA": 488, "AGP": 561, "Mito": 638, "ER": 730
 plate_colors = {"1h": "#2a78d6", "4h": "#eb6834", "24h": "#1baf7a"}
 line_colors = {"CL1": "#6250d6", "CL2": "#eda100"}
 sequential = LinearSegmentedColormap.from_list("blues", ["#cde2fb", "#2a78d6", "#0d366b"])
-sns.set_theme(style="ticks", context="notebook")
-plt.rcParams.update({"figure.dpi": 110, "axes.spines.top": False, "axes.spines.right": False})
+# figure style for print: figure sizes are the size on paper (7.2 in = full page width), text is 6-9 pt
+sns.set_theme(style="ticks")
+plt.rcParams.update({
+    "figure.dpi": 150, "savefig.dpi": 300, "savefig.bbox": "tight",
+    "font.family": "sans-serif", "font.sans-serif": ["Liberation Sans", "DejaVu Sans"],
+    "font.size": 7, "axes.titlesize": 8, "axes.labelsize": 7, "xtick.labelsize": 6, "ytick.labelsize": 6,
+    "legend.fontsize": 6.5, "legend.title_fontsize": 7, "figure.titlesize": 9,
+    "axes.linewidth": 0.6, "xtick.major.width": 0.6, "ytick.major.width": 0.6, "xtick.major.size": 2.5, "ytick.major.size": 2.5,
+    "axes.spines.top": False, "axes.spines.right": False, "legend.frameon": False, "pdf.fonttype": 42,
+})
 pl.Config.set_tbl_rows(40)
 pl.Config.set_tbl_cols(-1)
-pl.Config.set_tbl_width_chars(170)
 pl.Config.set_fmt_str_lengths(50)
 
 
@@ -111,8 +117,6 @@ limits = {
     "AGP signal inside cell outlines (%)": (90, 75, "high"),
     "Cells with almost no cytoplasm (%)": (2, 5, "low"),
     "Median cell solidity": (0.85, 0.80, "high"),
-    "Replicating treatments (%)": (50, 20, "high"),
-    "Replicating DMSO groups (negative control, %)": (10, 20, "low"),
 }
 
 
@@ -136,7 +140,7 @@ def score(name, value, group="All"):
 
 # ## When would we run CellProfiler again?
 # 
-# We run CellProfiler again if two things are true. First, a segmentation check (7.2–7.5) fails in at least half of the 6 plate and cell line groups. Second, the image check in 7.4 confirms the cause.
+# We run CellProfiler again if two things are true. First, a segmentation check (6.2–6.5) fails in at least half of the 6 plate and cell line groups. Second, the image check in 6.4 confirms the cause.
 # 
 # ## 1. Experiment design
 # 
@@ -204,7 +208,7 @@ mismatch = wells.filter(pl.col("ligand").is_not_null() & (pl.col("ligand_cell_li
 if mismatch.height:
     raise ValueError(f"Cell line rule disagrees with ligands.csv in {mismatch.height} wells")
 
-print(wells.group_by("cell_line", "well_type").agg(pl.len().alias("wells"), pl.col("treatment").n_unique().alias("treatments")).sort("cell_line", "well_type"))
+wells.group_by("cell_line", "well_type").agg(pl.len().alias("wells"), pl.col("treatment").n_unique().alias("treatments")).sort("cell_line", "well_type")
 
 
 # In[5]:
@@ -234,7 +238,7 @@ pl.DataFrame(settings)
 # 
 # ## 2. Load the data
 # 
-# We load about 30 key columns for all 2.6 million cells, the median profile of each site, and 100 random cells per well.
+# We load about 30 key columns for all 2.6 million cells, the image-level columns of every site, and 100 random cells per well (with all features).
 
 # In[6]:
 
@@ -293,29 +297,22 @@ features = [
 print(f"{len(features)} features out of {len(all_columns)} columns")
 
 
-def build_summaries(time):
-    """Save the median profile per site and a random sample of cells for one plate."""
-    site_path = cache_dir / f"site-median-profiles_{time}.parquet"
+def build_sample(time):
+    """Save a random sample of cells per well for one plate."""
     sample_path = cache_dir / f"cell-sample_{time}.parquet"
-    if site_path.exists() and sample_path.exists():
+    if sample_path.exists():
         return
     table = pl.read_parquet(plate_files[time], columns=["Metadata_Well", "Metadata_Site", *features])
-    table.group_by("Metadata_Well", "Metadata_Site").agg(
-        pl.len().alias("n_cells"), pl.col(features).median()
-    ).write_parquet(site_path)
     table.filter(
         pl.int_range(pl.len()).shuffle(seed=seed).over("Metadata_Well") < cells_per_well
     ).write_parquet(sample_path)
 
 
 for time in plate_order:
-    build_summaries(time)
+    build_sample(time)
 
-site_profiles = pl.concat(
-    [pl.read_parquet(cache_dir / f"site-median-profiles_{t}.parquet").with_columns(pl.lit(t).alias("plate")) for t in plate_order]
-).join(wells, on="Metadata_Well", how="left")
 cell_sample = pl.concat([pl.read_parquet(cache_dir / f"cell-sample_{t}.parquet") for t in plate_order])
-print(site_profiles.shape, cell_sample.shape)
+print(f"cell sample: {cell_sample.height:,} cells")
 
 
 # ## 3. Is the data complete?
@@ -335,7 +332,6 @@ completeness = (
     .sort("plate")
 )
 print(f"Expected sites per plate: {expected_sites} (380 wells; the 4 corner wells were not imaged)")
-print(completeness)
 
 for time in plate_order:
     site_counts = images.filter(pl.col("plate") == time).group_by("Metadata_Well").agg(pl.len().alias("n"))
@@ -345,89 +341,22 @@ error_columns = [c for c in images.columns if "ModuleError" in c]
 print("Sites with a module error:", images.select(pl.any_horizontal(pl.col(error_columns) > 0).sum()).item())
 
 score("Missing sites (%)", completeness["missing_pct"].max())
+completeness
 
 
-# **Result: PASS.** All 3,420 sites per plate were processed, with no errors. Three sites on the 24h plate (wells M04, N09, N12) have no cells left. They lie in the CL1 area with few cells (section 5). In total, the data holds 2,647,721 cells.
+# **Result: PASS.** All 3,420 sites per plate were processed, with no errors. Three sites on the 24h plate (wells M04, N09, N12) have no cells left. They lie in the CL1 area with few cells (see the cell count maps in `3.EDA/02.explore-metadata.ipynb`). In total, the data holds 2,647,721 cells.
 # 
 # ## 4. Are the images sharp and not over-exposed?
 # 
 # Notebook 02 (`02.qc.ipynb`) now checks this for each image, and flags blurred and over-exposed images in the QC profile.
 
-# ## 5. Are cell numbers even across the plate?
-# 
-# Cell density changes cell shape. An uneven plate adds differences that have nothing to do with treatment.
-# 
-# **Pass if:** control wells have similar counts, with no row or column pattern.
-
-# In[10]:
-
-
-def plate_heatmaps(table, value, title, cmap=sequential, center=None, label=None):
-    """Draw one map per plate. The line in the middle separates the two cell lines."""
-    rows = list("ABCDEFGHIJKLMNOP")
-    fig, axes = plt.subplots(1, 3, figsize=(17, 4.3), constrained_layout=True)
-    finite = table[value].drop_nans().drop_nulls()
-    vmin, vmax = (None, None) if center is not None else (finite.quantile(0.01), finite.quantile(0.99))
-    for ax, time in zip(axes, plate_order):
-        grid = np.full((16, 24), np.nan)
-        for row, column, val in table.filter(pl.col("plate") == time).select("row", "column", value).iter_rows():
-            grid[rows.index(row), column - 1] = val
-        mesh = ax.imshow(grid, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
-        if center is not None:
-            limit = np.nanquantile(np.abs(grid - center), 0.99)
-            mesh.set_clim(center - limit, center + limit)
-        ax.axvline(11.5, color="#0b0b0b", lw=1.5)
-        ax.set_title(f"{time}   CL1 | CL2")
-        ax.set_xticks(range(0, 24, 3), range(1, 25, 3))
-        ax.set_yticks(range(0, 16, 3), rows[::3])
-        ax.spines[:].set_visible(False)
-        fig.colorbar(mesh, ax=ax, shrink=0.85, label=label)
-    fig.suptitle(title)
-    plt.show()
-
-
-well_counts = (
-    images.group_by("plate", "Metadata_Well")
-    .agg(
-        pl.col("Image_Count_Cells").sum().alias("cells"),
-        pl.first("row", "column", "cell_line", "well_type", "edge", "treatment"),
-    )
-)
-plate_heatmaps(well_counts, "cells", "Cells per well", label="cells")
-
-
-# In[11]:
-
-
-control_counts = well_counts.filter(pl.col("well_type") == "control")
-print(
-    control_counts.group_by("plate", "cell_line")
-    .agg(
-        pl.len().alias("wells"),
-        pl.col("cells").median().alias("median_cells"),
-        pl.col("cells").min().alias("min"),
-        pl.col("cells").max().alias("max"),
-        (100 * pl.col("cells").std() / pl.col("cells").mean()).round(1).alias("cv_pct"),
-        (pl.col("cells").filter(pl.col("edge")).median() / pl.col("cells").filter(~pl.col("edge")).median()).round(2).alias("edge_vs_inner"),
-    )
-    .sort("cell_line", "plate")
-)
-print(well_counts.sort("cells").head(10).select("plate", "Metadata_Well", "cells", "treatment"))
-
-
-# **Result: look closer at the 24h plate.**
-# 
-# - At 1h and 4h, control wells are even (7–13% variation).
-# - At 24h, CL1 has patches with few cells (columns 3–4 in rows F–N, and rows M–N). This looks like a seeding or handling problem.
-# - CL2 nearly doubles from 1h to 24h (1,840 to 3,605 cells per control well). CL1 does not grow (2,300 to 2,085), but merged nuclei (section 7.3) make the CL1 count too low.
-# 
-# ## 6. Is the lighting even across each image?
+# ## 5. Is the lighting even across each image?
 # 
 # A cell's brightness should not depend on where it sits in the image.
 # 
 # **Pass if:** the brightest and dimmest parts of the image differ by less than 1.2-fold.
 
-# In[12]:
+# In[10]:
 
 
 grid_bins = 5
@@ -439,7 +368,7 @@ position = cells.filter(pl.col("well_type") == "control").with_columns(
 )
 
 ratios = []
-fig, axes = plt.subplots(3, 5, figsize=(14, 7.2), constrained_layout=True)
+fig, axes = plt.subplots(3, 5, figsize=(7.2, 4.6), constrained_layout=True)
 for i, time in enumerate(plate_order):
     for j, ch in enumerate(channels):
         grid = (
@@ -449,9 +378,10 @@ for i, time in enumerate(plate_order):
             .sort("y_bin", "x_bin")["value"].to_numpy().reshape(grid_bins, grid_bins)
         )
         ratios.append({"plate": time, "channel": ch, "ratio": grid.max() / grid.min()})
-        axes[i, j].imshow(grid / np.median(grid), cmap=sequential, vmin=0.7, vmax=1.3)
+        image = axes[i, j].imshow(grid / np.median(grid), cmap="RdBu_r", vmin=0.85, vmax=1.15)
         axes[i, j].set(xticks=[], yticks=[], title=f"{time} {ch}: {grid.max() / grid.min():.2f}")
-fig.suptitle("Brightness by position in the image, relative to the median (max/min in each title)")
+fig.colorbar(image, ax=axes, shrink=0.6, extend="both", label="brightness / median of the image\n(white = 1, the median)")
+fig.suptitle("Brightness by position in the image (5 × 5 grid), relative to the median (max/min in each title)")
 plt.show()
 
 ratios = pl.DataFrame(ratios)
@@ -461,15 +391,15 @@ for row in ratios.group_by("channel").agg(pl.col("ratio").max()).sort("channel")
 
 # **Result: PASS.** They differ by at most 1.12-fold, so the illumination correction works.
 # 
-# ## 7. Are nuclei and cells outlined correctly?
+# ## 6. Are nuclei and cells outlined correctly?
 # 
 # This is the key section. Features are only right if the outlines are right. A nucleus cut in two becomes two false cells, and two merged nuclei become one false cell.
 # 
-# ### 7.1 Look at the outlines
+# ### 6.1 Look at the outlines
 # 
 # Control wells with a typical cell count. Red = AGP, green = ER, blue = DNA. White = nucleus outline, yellow = cell outline.
 
-# In[13]:
+# In[11]:
 
 
 def plate_paths(time):
@@ -520,40 +450,40 @@ def typical_site(time, line):
     return group.sort((pl.col("Image_Count_Cells") - target).abs()).item(0, "Metadata_Acquisition")
 
 
-fig, axes = plt.subplots(2, 3, figsize=(16, 11), constrained_layout=True)
+fig, axes = plt.subplots(2, 3, figsize=(7.2, 5.0), constrained_layout=True)
 for i, line in enumerate(["CL1", "CL2"]):
     for j, time in enumerate(plate_order):
         site = typical_site(time, line)
         axes[i, j].imshow(composite(time, site))
-        axes[i, j].set_title(f"{line}, {time}: {site}")
+        axes[i, j].set_title(f"{line}, {time}: {site}", fontsize=6)
         axes[i, j].axis("off")
 plt.show()
 
 
-# **Result:** nuclei have one smooth outline each, and cell outlines reach the dim edge of the cell. In the dense CL1 clumps at 24h, we cannot see by eye whether each nucleus has its own outline (see 7.3).
+# **Result:** nuclei have one smooth outline each, and cell outlines reach the dim edge of the cell. In the dense CL1 clumps at 24h, we cannot see by eye whether each nucleus has its own outline (see 6.3).
 # 
-# ### 7.2 Do nuclei fit the allowed size range?
+# ### 6.2 Do nuclei fit the allowed size range?
 # 
 # CellProfiler removes objects outside 30–120 pixels in diameter.
 # 
 # **Pass if:** the size curve falls to zero before both limits, with under 0.5% of nuclei near the upper limit.
 
-# In[14]:
+# In[12]:
 
 
-fig, axes = plt.subplots(1, 2, figsize=(13, 3.8), sharey=True)
+fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.5), sharey=True, layout="constrained")
 for ax, line in zip(axes, ["CL1", "CL2"]):
     for time in plate_order:
         values = cells.filter((pl.col("plate") == time) & (pl.col("cell_line") == line) & (pl.col("well_type") == "control"))
         ax.hist(
             values["Nuclei_AreaShape_EquivalentDiameter"].to_numpy(), bins=np.arange(15, nucleus_diameter_range[1] + 10, 1),
-            density=True, histtype="step", lw=2, color=plate_colors[time], label=time,
+            density=True, histtype="step", lw=1.2, color=plate_colors[time], label=time,
         )
     for limit in nucleus_diameter_range:
-        ax.axvline(limit, color="#52514e", ls="--")
+        ax.axvline(limit, color="#52514e", ls="--", lw=0.8)
     ax.set(title=f"{line} control wells", xlabel="Nucleus diameter (pixels); dashed = allowed range")
 axes[0].set_ylabel("Share of nuclei")
-axes[0].legend(title="Plate", frameon=False)
+axes[0].legend(title="Plate")
 plt.show()
 
 near_limit = (
@@ -564,20 +494,20 @@ near_limit = (
     )
     .sort("cell_line", "plate")
 )
-print(near_limit)
 for row in near_limit.iter_rows(named=True):
     score("Nuclei near the upper size limit (%)", row["pct_near_upper_limit"], f"{row['plate']} {row['cell_line']}")
+near_limit
 
 
 # **Result: PASS.** At most 0.5% of nuclei are near the upper limit. The median diameter is 50–54 pixels in CL1 and 61–67 pixels in CL2. The CL1 24h curve has an extra shoulder at about 55–70 pixels, which merged nuclei would give.
 # 
-# ### 7.3 Does each nucleus hold the right amount of DNA?
+# ### 6.3 Does each nucleus hold the right amount of DNA?
 # 
 # This is a built-in control. A healthy nucleus holds one DNA set (G1) or two (G2), so total DNA shows two peaks, the second at twice the first. A piece of a nucleus falls below the first peak. Two merged nuclei fall above the second.
 # 
 # **Pass if:** there are two clear peaks, and under 10% of nuclei hold less than 70% of the first peak.
 
-# In[15]:
+# In[13]:
 
 
 def g1_peak(values):
@@ -587,7 +517,7 @@ def g1_peak(values):
     return bin_edges[np.argmax(smooth)] + (bin_edges[1] - bin_edges[0]) / 2
 
 
-fig, axes = plt.subplots(1, 2, figsize=(13, 3.8), sharey=True)
+fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.5), sharey=True, layout="constrained")
 low_dna = []
 for ax, line in zip(axes, ["CL1", "CL2"]):
     for time in plate_order:
@@ -598,19 +528,19 @@ for ax, line in zip(axes, ["CL1", "CL2"]):
         peak = g1_peak(values)
         share = 100 * np.mean(values < peak + np.log2(0.7))
         low_dna.append({"cell_line": line, "plate": time, "peak_log2": round(peak, 2), "pct_too_little_dna": round(share, 1)})
-        ax.hist(values - peak, bins=np.arange(-3, 2.5, 0.05), density=True, histtype="step", lw=2, color=plate_colors[time], label=time)
-    ax.axvline(0, color="#52514e", ls="--")
-    ax.axvline(1, color="#52514e", ls="--")
-    ax.axvline(np.log2(0.7), color="#d03b3b", ls=":")
+        ax.hist(values - peak, bins=np.arange(-3, 2.5, 0.05), density=True, histtype="step", lw=1.2, color=plate_colors[time], label=time)
+    ax.axvline(0, color="#52514e", ls="--", lw=0.8)
+    ax.axvline(1, color="#52514e", ls="--", lw=0.8)
+    ax.axvline(np.log2(0.7), color="#e34948", ls=":", lw=1)
     ax.set(title=f"{line} control wells", xlabel="Total DNA, log2, relative to the first peak\n0 = one DNA set, 1 = two sets, red = 70% limit")
 axes[0].set_ylabel("Share of nuclei")
-axes[0].legend(title="Plate", frameon=False)
+axes[0].legend(title="Plate")
 plt.show()
 
 low_dna = pl.DataFrame(low_dna)
-print(low_dna)
 for row in low_dna.iter_rows(named=True):
     score("Nuclei with too little DNA (%)", row["pct_too_little_dna"], f"{row['plate']} {row['cell_line']}")
+low_dna
 
 
 # **Result: PASS for cut nuclei, but CL1 has merged nuclei.**
@@ -619,13 +549,13 @@ for row in low_dna.iter_rows(named=True):
 # - **CL1 has extra peaks at 3 and 4 DNA sets.** No single nucleus holds 3 sets, but a G1 and a G2 nucleus in one outline do. Notebook 02 counts these objects: 13.7–27.5% of CL1 and 4.5–6.4% of CL2 objects hold more than 2.8 times the first peak.
 # - This check has no limit for high DNA, so the scorecard does not show this problem.
 # 
-# ### 7.4 Are nuclei cut or lost?
+# ### 6.4 Are nuclei cut or lost?
 # 
 # We look at the masks of 72 control images. Two touching nuclei usually form a shape with a dent, while one nucleus cut in two forms a smooth shape. We also look for DNA signal with no nucleus on it (a lost nucleus).
 # 
 # **Pass if:** under 2% of objects are pieces of a cut nucleus, and under 2% of the DNA signal has no nucleus. **Control:** if the pieces are real, joining them must remove the low-DNA objects.
 
-# In[16]:
+# In[14]:
 
 
 def measure_site(time, site, threshold, illumination):
@@ -717,7 +647,7 @@ nuclei_objects = pl.read_parquet(object_path).join(site_lookup, on=["site", "pla
 print(site_segmentation.height, "sites,", nuclei_objects.height, "objects")
 
 
-# In[17]:
+# In[15]:
 
 
 cut_table = (
@@ -738,15 +668,14 @@ cut_table = (
     )
     .sort("cell_line", "plate")
 )
-print(cut_table)
-
 for row in cut_table.iter_rows(named=True):
     group = f"{row['plate']} {row['cell_line']}"
     score("Objects that are pieces of a cut nucleus (%)", row["pct_cut"], group)
     score("DNA signal without a nucleus object (%)", row["pct_lost_signal"], group)
+cut_table
 
 
-# In[18]:
+# In[16]:
 
 
 # positive control: join the pieces of cut nuclei, then repeat the DNA check
@@ -762,16 +691,16 @@ repaired = pl.concat(
     ]
 )
 
-fig, axes = plt.subplots(1, 2, figsize=(13, 3.8), sharey=True)
+fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.5), sharey=True, layout="constrained")
 repair_rows = []
 for ax, line in zip(axes, ["CL1", "CL2"]):
     before = np.log2(nuclei_objects.filter(pl.col("cell_line") == line)["dna"].to_numpy())
     after = np.log2(repaired.filter(pl.col("cell_line") == line)["dna"].to_numpy())
     peak = g1_peak(after)
-    ax.hist(before - peak, bins=np.arange(-3, 2.5, 0.1), density=True, histtype="step", lw=2, color="#e34948", label="As segmented")
-    ax.hist(after - peak, bins=np.arange(-3, 2.5, 0.1), density=True, histtype="step", lw=2, color="#2a78d6", label="Cut pieces joined")
-    ax.axvline(0, color="#52514e", ls="--")
-    ax.axvline(1, color="#52514e", ls="--")
+    ax.hist(before - peak, bins=np.arange(-3, 2.5, 0.1), density=True, histtype="step", lw=1.2, color="#e34948", label="As segmented")
+    ax.hist(after - peak, bins=np.arange(-3, 2.5, 0.1), density=True, histtype="step", lw=1.2, color="#2a78d6", label="Cut pieces joined")
+    ax.axvline(0, color="#52514e", ls="--", lw=0.8)
+    ax.axvline(1, color="#52514e", ls="--", lw=0.8)
     ax.set(title=line, xlabel="Total DNA, log2, relative to the first peak")
     repair_rows.append(
         {
@@ -780,13 +709,17 @@ for ax, line in zip(axes, ["CL1", "CL2"]):
             "pct_low_dna_after_joining": round(100 * np.mean(after < peak + np.log2(0.7)), 1),
         }
     )
-axes[0].legend(frameon=False)
+axes[0].legend()
 axes[0].set_ylabel("Share of objects")
 plt.show()
-print(pl.DataFrame(repair_rows))
+pl.DataFrame(repair_rows)
+
+
+# In[17]:
+
 
 # the real nucleus size, after the pieces are joined
-print(
+(
     repaired.with_columns((2 * (pl.col("area") / np.pi).sqrt()).alias("diameter"))
     .group_by("cell_line")
     .agg(
@@ -805,7 +738,7 @@ print(
 # - The joined shapes are larger than one nucleus (median 73–95 pixels). So most are real nuclei that touch closely, not pieces.
 # - 0.3–2.4% of the DNA signal has no nucleus.
 # 
-# ### 7.5 Do cell outlines follow the cell edge?
+# ### 6.5 Do cell outlines follow the cell edge?
 # 
 # About two thirds of the features come from the cell and cytoplasm outlines.
 # 
@@ -816,7 +749,7 @@ print(
 # - under 2% of cells have almost no cytoplasm, and
 # - DNA is at least 3 times brighter in the nucleus than in the cytoplasm.
 
-# In[19]:
+# In[18]:
 
 
 cell_shape = (
@@ -834,19 +767,22 @@ cell_shape = (
     )
     .sort("cell_line", "plate")
 )
-print(cell_shape)
-
 for row in cell_shape.iter_rows(named=True):
     group = f"{row['plate']} {row['cell_line']}"
     score("Median cell solidity", row["median_solidity"], group)
     score("Cells with almost no cytoplasm (%)", row["pct_almost_no_cytoplasm"], group)
 for row in cut_table.iter_rows(named=True):
     score("AGP signal inside cell outlines (%)", row["agp_inside_cells_pct"], f"{row['plate']} {row['cell_line']}")
+cell_shape
 
-print(
-    images.with_columns((100 * pl.col("Image_Count_Cells") / pl.col("Image_Count_CellsPaired")).alias("kept"))
-    .group_by("cell_line", "plate").agg(pl.col("kept").median().round(1).alias("pct_cells_kept_after_border_filter")).sort("cell_line", "plate")
-)
+
+# In[19]:
+
+
+# share of cells kept after CellProfiler removes the cells that touch the image border
+images.with_columns((100 * pl.col("Image_Count_Cells") / pl.col("Image_Count_CellsPaired")).alias("kept")).group_by("cell_line", "plate").agg(
+    pl.col("kept").median().round(1).alias("pct_cells_kept_after_border_filter")
+).sort("cell_line", "plate")
 
 
 # In[20]:
@@ -880,7 +816,7 @@ compartment_ratio
 # - 151 objects are giant (over 100,000 pixels). They are rare, but clearly wrong.
 # - The filter for cells on the image border removes 11–17% of cells, most in CL2, which has the largest cells.
 # 
-# ## 8. Are the features usable?
+# ## 7. Are the features usable?
 # 
 # **Pass if:** few values are missing, and no feature is constant.
 
@@ -902,297 +838,16 @@ print(f"Features with over 1% missing: {feature_nulls.filter(pl.col('pct_missing
 print(f"Features with over 5% missing: {feature_nulls.filter(pl.col('pct_missing') > 5).height}")
 print(f"Largest share missing: {feature_nulls['pct_missing'].max():.2f}%")
 print(f"Constant features: {len(constant)}", constant[:6])
-print(feature_nulls.sort("n_null", descending=True).head(5))
+feature_nulls.sort("n_null", descending=True).head(5)
 
 
-# In[22]:
-
-
-well_columns = ["plate", "Metadata_Well", "cell_line", "well_type", "treatment", "edge", "row", "column"]
-usable = [f for f in features if f not in set(constant)]
-
-well_profiles = site_profiles.group_by(well_columns).agg(
-    pl.col("n_cells").sum(), pl.col(usable).median()
-).sort("plate", "Metadata_Well")
-normalized = []
-for (time, line), group in well_profiles.group_by("plate", "cell_line", maintain_order=True):
-    control = group.filter(pl.col("well_type") == "control").select(usable).to_numpy()
-    center = np.nanmedian(control, axis=0)
-    mad = np.nanmedian(np.abs(control - center), axis=0) * 1.4826
-    mad[mad == 0] = np.nan
-    values = (group.select(usable).to_numpy() - center) / mad
-    normalized.append((group.drop(usable), values))
-
-well_info = pl.concat([info for info, _ in normalized])
-well_matrix = np.nan_to_num(np.vstack([values for _, values in normalized]), nan=0, posinf=0, neginf=0).clip(-20, 20)
-
-# keep features that differ between wells, and drop near copies of a kept feature
-order = np.argsort(-np.median(np.abs(well_matrix), axis=0))
-order = order[well_matrix[:, order].std(axis=0) > 0]
-correlation = np.corrcoef(well_matrix[:, order], rowvar=False)
-kept = []
-for index in range(len(order)):
-    if not kept or np.abs(correlation[index, kept]).max() < 0.9:
-        kept.append(index)
-selected = order[kept]
-selected_names = [usable[i] for i in selected]
-print(f"{len(usable)} usable features -> {len(selected)} after dropping near copies (|r| >= 0.9)")
-print(pl.Series([name.split("_")[0] + "_" + name.split("_")[1] for name in selected_names]).value_counts(sort=True).head(12))
-
-
-# **Result: PASS.** All 3,041 features have at most 0.1% missing values, and none is constant. 885 remain after we remove near-duplicates, which is normal.
+# **Result: PASS.** All 3,041 features have at most 0.1% missing values, and none is constant. The preprocessing module (`2.preprocessing`) selects the features used downstream.
 # 
-# ## 9. Do the profiles carry biology?
-# 
-# ### 9.1 What drives the differences between control wells?
-# 
-# We expect cell line and plate (time) to matter, but not cell count.
-# 
-# **Pass if:** control wells group by plate and cell line, and cell count explains little inside each group.
-
-# In[23]:
-
-
-control_raw = well_profiles.filter(pl.col("well_type") == "control")
-raw_matrix = control_raw.select(selected_names).to_numpy()
-raw_matrix = np.nan_to_num((raw_matrix - np.nanmedian(raw_matrix, axis=0)) / (np.nanstd(raw_matrix, axis=0) + 1e-9), nan=0, posinf=0, neginf=0).clip(-10, 10)
-pca = PCA(n_components=2, random_state=seed)
-scores = pca.fit_transform(raw_matrix)
-
-fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.4), sharex=True, sharey=True)
-for time in plate_order:
-    mask = (control_raw["plate"] == time).to_numpy()
-    axes[0].scatter(*scores[mask].T, s=16, color=plate_colors[time], label=time, alpha=0.8)
-for line in ["CL1", "CL2"]:
-    mask = (control_raw["cell_line"] == line).to_numpy()
-    axes[1].scatter(*scores[mask].T, s=16, color=line_colors[line], label=line, alpha=0.8)
-for ax, title in zip(axes, ["Colored by plate", "Colored by cell line"]):
-    ax.set(title=title, xlabel=f"PC1 ({100 * pca.explained_variance_ratio_[0]:.0f}% of variation)")
-    ax.legend(frameon=False)
-axes[0].set_ylabel(f"PC2 ({100 * pca.explained_variance_ratio_[1]:.0f}% of variation)")
-plt.show()
-
-
-def share_explained(matrix, groups):
-    """Share of each feature's variation that lies between groups."""
-    labels = np.unique(groups, return_inverse=True)[1]
-    total = ((matrix - matrix.mean(axis=0)) ** 2).sum(axis=0)
-    between = np.zeros(matrix.shape[1])
-    for label in np.unique(labels):
-        part = matrix[labels == label]
-        between += len(part) * (part.mean(axis=0) - matrix.mean(axis=0)) ** 2
-    return between / np.where(total == 0, np.nan, total)
-
-
-plate_labels = control_raw["plate"].to_numpy()
-line_labels = control_raw["cell_line"].to_numpy()
-print("Median share of feature variation in control wells:")
-print(f"  plate:     {np.nanmedian(share_explained(raw_matrix, plate_labels)):.2f}")
-print(f"  cell line: {np.nanmedian(share_explained(raw_matrix, line_labels)):.2f}")
-
-
-# In[24]:
-
-
-# inside each plate and cell line: how strongly does cell count drive the profile?
-rows = []
-for (time, line), part in well_info.with_row_index("position").filter(pl.col("well_type") == "control").group_by("plate", "cell_line"):
-    position = part["position"].to_numpy()
-    matrix = well_matrix[position][:, selected]
-    counts = np.log2(part["n_cells"].to_numpy().astype(float))
-    counts = (counts - counts.mean()) / counts.std()
-    z = (matrix - matrix.mean(axis=0)) / (matrix.std(axis=0) + 1e-9)
-    r = (z * counts[:, None]).mean(axis=0)
-    rows.append({"cell_line": line, "plate": time, "median_r2_with_cell_count": round(float(np.nanmedian(r ** 2)), 3), "pct_features_r2_over_0.25": round(100 * float(np.mean(r ** 2 > 0.25)), 1)})
-print(pl.DataFrame(rows).sort("cell_line", "plate"))
-
-
-# **Result: as expected, but cell count matters.**
-# 
-# - Control wells form 6 clear groups (plate × cell line). Cell line explains most of the variation. One 24h CL2 well is an outlier.
-# - Plate differences mix time with the 24h exposure change (section 1).
-# - **Cell count drives many features** in CL1 at 24h (62% of features) and CL2 at 4h (52%). Correct for cell count in later analysis.
-# 
-# ### 9.2 Do replicate wells agree?
-# 
-# We test whether the 3 replicate wells of a treatment are more alike than random wells. The share of treatments that pass is the **percent replicating**. As a negative control, random groups of DMSO wells should pass only about 5% of the time.
-# 
-# **Pass if:** at least 50% of treatments replicate.
-
-# In[25]:
-
-
-rng = np.random.default_rng(seed)
-n_null = 2000
-
-
-def median_pairwise_correlation(matrix):
-    """Median correlation between all pairs of rows."""
-    values = np.corrcoef(matrix)
-    return np.nanmedian(values[np.triu_indices(len(matrix), 1)])
-
-
-def replicate_test(info, matrix):
-    """Compare replicate agreement with random groups, for one plate and cell line."""
-    treated = info.filter(pl.col("well_type") != "control")
-    treatments = treated["treatment"].to_numpy()
-    treated_positions = treated["position"].to_numpy()
-    control_positions = info.filter(pl.col("well_type") == "control")["position"].to_numpy()
-
-    null = []
-    while len(null) < n_null:
-        pick = rng.choice(len(treated_positions), 3, replace=False)
-        if len(set(treatments[pick])) == 3:
-            null.append(median_pairwise_correlation(matrix[treated_positions[pick]]))
-    null = np.array(null)
-    line = np.nanquantile(null, 0.95)
-
-    rows = []
-    for treatment in np.unique(treatments):
-        members = treated_positions[treatments == treatment]
-        if len(members) < 2:
-            continue
-        value = median_pairwise_correlation(matrix[members])
-        rows.append({"treatment": treatment, "correlation": value, "null_line": line, "p": (1 + np.sum(null >= value)) / (1 + len(null))})
-
-    control_values = np.array([
-        median_pairwise_correlation(matrix[rng.choice(control_positions, 3, replace=False)]) for _ in range(500)
-    ])
-    return rows, float(np.nanmean(control_values >= line) * 100)
-
-
-replicate_rows = []
-control_pass = []
-indexed = well_info.with_row_index("position")
-selected_matrix = well_matrix[:, selected]
-for time in plate_order:
-    for line in ["CL1", "CL2"]:
-        part = indexed.filter((pl.col("plate") == time) & (pl.col("cell_line") == line))
-        rows, control_rate = replicate_test(part, selected_matrix)
-        replicate_rows += [{"plate": time, "cell_line": line, **row} for row in rows]
-        control_pass.append({"plate": time, "cell_line": line, "dmso_pass_pct": round(control_rate, 1)})
-
-replicates = pl.DataFrame(replicate_rows).with_columns(
-    pl.col("treatment").str.contains("TGFb1|IL6").alias("is_ligand")
-)
-replicates = replicates.with_columns(
-    pl.Series("fdr", multipletests(replicates["p"].to_numpy(), method="fdr_bh")[1]),
-)
-replicating = (
-    replicates.group_by("plate", "cell_line")
-    .agg(
-        pl.len().alias("treatments"),
-        (pl.col("correlation") > pl.col("null_line")).sum().alias("replicating"),
-        (pl.col("fdr") < 0.05).sum().alias("replicating_fdr_0.05"),
-        pl.col("correlation").median().round(2).alias("median_correlation"),
-        pl.col("null_line").first().round(2),
-    )
-    .with_columns((100 * pl.col("replicating") / pl.col("treatments")).round(1).alias("pct_replicating"))
-    .join(pl.DataFrame(control_pass), on=["plate", "cell_line"])
-)
-low, high = proportion_confint(replicating["replicating"].to_numpy(), replicating["treatments"].to_numpy(), method="wilson")
-replicating = replicating.with_columns(
-    pl.Series("ci_low", (100 * low).round(0)), pl.Series("ci_high", (100 * high).round(0))
-).sort("cell_line", "plate")
-print(replicating)
-
-for row in replicating.iter_rows(named=True):
-    group = f"{row['plate']} {row['cell_line']}"
-    score("Replicating treatments (%)", row["pct_replicating"], group)
-    score("Replicating DMSO groups (negative control, %)", row["dmso_pass_pct"], group)
-
-
-# **Result: mixed.**
-# 
-# - 19–29% of treatments replicate at 1h, 38–43% at 4h and 43–52% at 24h. Only CL2 at 24h reaches 50%. Each value rests on 21 treatments, so it is uncertain (for example, 32–72% for CL2 at 24h).
-# - Agreement rises with time, as expected.
-# - The negative control passes: 2.4–6.2% of DMSO groups pass.
-# 
-# ### 9.3 Does TGFβ1 show the expected effect?
-# 
-# TGFβ1 changes cell shape and adhesion in many pancreatic cancer lines, so it is our positive control. We measure how far each treatment moves from DMSO. DMSO wells themselves score about 0.6.
-# 
-# **Pass if:** TGFβ1 moves further at 24h than at 1h, and further at a high dose than at a low dose.
-
-# In[26]:
-
-
-distances = (
-    well_info.with_columns(pl.Series("distance", np.median(np.abs(selected_matrix), axis=1)))
-    .group_by("plate", "cell_line", "treatment")
-    .agg(pl.col("distance").median().round(2), pl.len().alias("wells"))
-)
-ligand_view = (
-    distances.filter(pl.col("treatment").str.contains("TGFb1|IL6|DMSO"))
-    .pivot(on="plate", index=["cell_line", "treatment"], values="distance")
-    .select("cell_line", "treatment", *plate_order)
-    .sort("cell_line", "treatment")
-)
-print(ligand_view)
-print(
-    replicates.filter(pl.col("is_ligand"))
-    .with_columns(pl.when(pl.col("correlation") > pl.col("null_line")).then(pl.lit("yes")).otherwise(pl.lit("no")).alias("passed"))
-    .pivot(on="plate", index=["cell_line", "treatment"], values="passed")
-    .select("cell_line", "treatment", *plate_order)
-    .sort("cell_line", "treatment")
-)
-
-fig, axes = plt.subplots(1, 2, figsize=(13, 3.8), sharey=True)
-dose_order = ["L", "M", "H"]
-dose_shades = {"L": "#86b6ef", "M": "#2a78d6", "H": "#0d366b"}
-for ax, line in zip(axes, ["CL1", "CL2"]):
-    for dose in dose_order:
-        values = [
-            distances.filter((pl.col("cell_line") == line) & (pl.col("plate") == t) & (pl.col("treatment") == f"TGFb1_{dose}"))["distance"].item()
-            for t in plate_order
-        ]
-        ax.plot(plate_order, values, marker="o", lw=2, color=dose_shades[dose], label=dose)
-    control = [
-        distances.filter((pl.col("cell_line") == line) & (pl.col("plate") == t) & (pl.col("treatment") == "DMSO"))["distance"].item()
-        for t in plate_order
-    ]
-    ax.plot(plate_order, control, marker="o", lw=2, color="#52514e", ls="--", label="DMSO")
-    ax.set(title=f"{line}: TGFβ1", xlabel="Plate")
-axes[0].set_ylabel("Distance from DMSO")
-axes[0].legend(title="Dose", frameon=False)
-plt.show()
-
-
-# In[27]:
-
-
-# which part of the cell carries the replicate signal?
-feature_groups = {
-    "Nuclei": [i for i, n in zip(selected, selected_names) if n.startswith("Nuclei_")],
-    "Cells": [i for i, n in zip(selected, selected_names) if n.startswith("Cells_")],
-    "Cytoplasm": [i for i, n in zip(selected, selected_names) if n.startswith("Cytoplasm_")],
-}
-rows = []
-for name, columns in feature_groups.items():
-    for line in ["CL1", "CL2"]:
-        passed, total = 0, 0
-        for time in plate_order:
-            part = indexed.filter((pl.col("plate") == time) & (pl.col("cell_line") == line))
-            results, _ = replicate_test(part, well_matrix[:, columns])
-            passed += sum(r["correlation"] > r["null_line"] for r in results)
-            total += len(results)
-        rows.append({"features": name, "n_features": len(columns), "cell_line": line, "pct_replicating": round(100 * passed / total, 1)})
-print(pl.DataFrame(rows).sort("features", "cell_line"))
-
-
-# **Result: PASS for time, not for dose.**
-# 
-# - TGFβ1 profiles replicate in 9 of 18 tests (plate × cell line × dose), and move up to 1.57 from DMSO (DMSO: 0.58–0.66).
-# - All 6 TGFβ1 groups move further at 24h than at 1h.
-# - At 24h, the medium dose moves furthest in both cell lines, so there is no clear dose response.
-# - IL6 replicates in only 1 of 18 tests, which chance alone would give.
-# - Nucleus, cell and cytoplasm features perform about equally (32–37% replicating).
-# 
-# ## 10. Scorecard
+# ## 8. Scorecard
 # 
 # The worst result of each check across plates and cell lines.
 
-# In[28]:
+# In[22]:
 
 
 results_table = pl.DataFrame(scorecard)
@@ -1218,7 +873,6 @@ worst = (
 )
 order = {name: i for i, name in enumerate(limits)}
 worst = worst.with_columns(pl.col("check").replace_strict(order, return_dtype=pl.Int64).alias("order")).sort("order").drop("order")
-print(worst)
-
 results_table.write_csv(results_dir / "quality-scorecard.csv")
+worst
 

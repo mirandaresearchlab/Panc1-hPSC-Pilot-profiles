@@ -7,17 +7,18 @@
 # 
 # A **batch effect** is a difference in the profiles that comes from *how* the wells were handled or measured, not from the biology. For example, if every other row of a plate received a little less medium, the DMSO wells in those rows would look different from the other DMSO wells, and a treatment placed in those rows would look "active" only because of where it sits.
 # 
-# The **DMSO wells** are the test: they all got the same treatment, so within one plate and cell line they should look alike. Any pattern among them is technical.
+# Each plate is one time point and one **batch**, and the 3 replicate wells of a treatment always sit on the same plate. Treated wells can differ because of their treatment, so **we assess batch effects only on the DMSO wells**: they all got the same treatment, so within one plate and cell line they should look alike, and any pattern among them is technical. The treated wells appear only in the biology overview (sections 4 and 5).
 # 
 # - **H0:** the DMSO wells of a plate and cell line differ only at random; no technical factor explains the differences.
 # - **H1:** a technical factor (plate position, cell number, imaging order) makes some DMSO wells differ more than others.
 # 
 # What we do:
 # 
-# 1. **UMAP maps** of single cells and wells, to see what separates the profiles.
-# 2. **Distance from DMSO**: how far each DMSO well lies from the typical DMSO well of its plate and cell line, drawn on the plate.
-# 3. **Tests in DMSO wells**: does this distance follow plate area, cell number, distance to the plate edge, or imaging time?
-# 4. **Features that follow cell number** in DMSO wells.
+# 1. **UMAP maps** of single cells and wells, to see what separates the profiles (biology overview).
+# 2. **UMAP of the DMSO wells only**, coloured by plate and by each technical factor.
+# 3. **Distance from DMSO**: how far each DMSO well lies from the typical DMSO well of its plate and cell line, drawn on the plate.
+# 4. **Tests in DMSO wells**: does this distance follow plate area, cell number, distance to the plate edge, or imaging time?
+# 5. **Features that follow cell number** in DMSO wells.
 # 
 # ## Setup
 # 
@@ -152,7 +153,7 @@ failed_wells
 # For each well we add:
 # 
 # - **cell number relative to DMSO:** log2(all cells in the well / median of the DMSO wells of the same plate and cell line). 0 = like DMSO, −1 = half as many cells. We count all cells, before QC, because crowding depends on every cell in the well.
-# - **plate area:** whether the well sits in the odd rows of columns 1–6 (CL1 half), the area the plate maps below point to;
+# - **plate area:** whether the well sits in the odd rows of columns 1–6 (CL1 half), the area the plate map of section 7 points to;
 # - **wells to the plate edge:** 0 for the outer ring, up to 7 in the centre;
 # - **imaging time:** minutes after the first well of the plate was imaged.
 
@@ -284,7 +285,7 @@ save_fig(fig, "01_umap_single-cells")
 # 
 # ## 5. What separates the wells?
 # 
-# Each dot is one well. The top row shows biology (cell line, time point, treatment), the bottom row the technical factors of section 2. In the bottom-left panel, the wells in the odd rows of columns 1–6 (CL1) are colored by plate; all other wells are grey.
+# Each dot is one well, DMSO and treated. This map shows the biology (cell line, time point, treatment); section 6 looks at the technical factors on the DMSO wells alone.
 
 # In[7]:
 
@@ -294,58 +295,90 @@ treatment_group = np.where(
     wells["is_dmso"].to_numpy(), "DMSO",
     np.where(wells["Metadata_treatment"].is_in(["TGFb1", "CBK600005"]).to_numpy(), wells["Metadata_treatment"].to_numpy(), "other treatment"),
 )
-area_group = np.where(wells["shifted_area"].to_numpy(), wells["time_point"].to_numpy(), "other wells")
-area_colors = {"other wells": background, **plate_colors}
-
-fig, axes = plt.subplots(2, 3, figsize=(7.2, 5.0), layout="constrained")
+fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.8), layout="constrained")
 size = 5
-umap_panel(axes[0, 0], well_xy, wells["cell_line"], line_colors, "a  Cell line", size)
-umap_panel(axes[0, 1], well_xy, wells["time_point"], plate_colors, "b  Time point (plate)", size)
-umap_panel(axes[0, 2], well_xy, treatment_group, treatment_colors, "c  Treatment (all doses)", size)
-umap_panel(axes[1, 0], well_xy, area_group, area_colors, "d  CL1, odd rows of columns 1–6", size)
-for ax, values, cmap, norm, title, label in [
-    (axes[1, 1], wells["log2_cells"].to_numpy(), plt.get_cmap("RdBu_r"), TwoSlopeNorm(0, -1.5, 1.5), "e  Cell number vs DMSO", "log2(cells / DMSO median)"),
-    (axes[1, 2], wells["wells_to_edge"].to_numpy(), blues.reversed(), Normalize(0, 7), "f  Distance to the plate edge", "wells to the edge"),
-]:
-    # draw the most extreme wells last, so they are not covered
-    order = np.argsort(np.abs(norm(values) - 0.5)) if isinstance(norm, TwoSlopeNorm) else np.argsort(-values)
-    points = ax.scatter(*well_xy[order].T, c=values[order], cmap=cmap, norm=norm, s=size, linewidths=0, rasterized=True)
-    ax.set(title=title, xticks=[], yticks=[])
-    ax.spines[["left", "bottom"]].set_visible(False)
-    fig.colorbar(points, ax=ax, location="bottom", shrink=0.8, aspect=25, pad=0.02, label=label, extend="both" if ax is axes[1, 1] else "neither")
-for ax, colors in [(axes[0, 0], line_colors), (axes[0, 1], plate_colors), (axes[0, 2], treatment_colors), (axes[1, 0], area_colors)]:
+umap_panel(axes[0], well_xy, wells["cell_line"], line_colors, "a  Cell line", size)
+umap_panel(axes[1], well_xy, wells["time_point"], plate_colors, "b  Time point (plate)", size)
+umap_panel(axes[2], well_xy, treatment_group, treatment_colors, "c  Treatment (all doses)", size)
+for ax, colors in zip(axes, [line_colors, plate_colors, treatment_colors]):
     ax.legend(handles=[Line2D([], [], marker="o", ls="", color=c, markersize=4, label=n) for n, c in colors.items()],
-              loc="upper center", bbox_to_anchor=(0.5, -0.04), ncols=2, handletextpad=0.2, columnspacing=0.8)
-fig.suptitle(f"Wells ({agg_profiles.n_obs:,} well profiles): biology (top) and technical factors (bottom)")
+              loc="upper center", bbox_to_anchor=(0.5, -0.02), ncols=2, handletextpad=0.2, columnspacing=0.8)
+fig.suptitle(f"All wells ({agg_profiles.n_obs:,} well profiles, DMSO and treated)")
 save_fig(fig, "02_umap_wells")
 
+
+# **Result:**
+# 
+# - Each cell line is normalized to its own DMSO wells, so the two lines overlap in most of the map. The 24h wells spread into arms (b).
+# - CBK600005 forms its own groups at the edge of the map (c); TGFβ1 and the other treatments mostly mix with DMSO.
+# - A separate island sits at the top left. It holds DMSO and treated wells alike, so it is not a treatment effect; section 6 shows what it is.
+# 
+# ## 6. Batch effects: UMAP of the DMSO wells
+# 
+# From here on we use **only the DMSO wells**. We repeat the PCA (95% of the variance) and the UMAP on the DMSO wells alone, so the map is not shaped by treatment effects, and color it by the batch (plate), the cell line, and each technical factor of section 2. In panel c, the DMSO wells in the odd rows of columns 1–6 (CL1) are colored by plate; all other DMSO wells are grey.
+# 
+# **Pass if:** the DMSO wells of each plate and cell line form one even cloud, with no group that follows a technical factor.
 
 # In[8]:
 
 
-# which wells form the separate island of the well UMAP? the wells far from the main group, by plate and plate area
-centre = np.median(well_xy, axis=0)
-far = np.linalg.norm(well_xy - centre, axis=1)
-wells = wells.with_columns(umap_distance_from_centre=pl.Series(far))
-wells.group_by("time_point", "cell_line", "shifted_area").agg(
-    wells=pl.len(), dmso_wells=pl.col("is_dmso").sum(), median_umap_distance_from_centre=pl.col("umap_distance_from_centre").median().round(1),
+dmso_rows = wells.filter(pl.col("is_dmso"))["row"].to_numpy()
+dmso_adata = agg_profiles[dmso_rows].copy()
+embed(dmso_adata, "DMSO wells")
+dmso = wells.filter(pl.col("is_dmso"))
+dmso_xy = dmso_adata.obsm["X_umap"]
+dmso_area = np.where(dmso["shifted_area"].to_numpy(), dmso["time_point"].to_numpy(), "other DMSO wells")
+oranges = LinearSegmentedColormap.from_list("oranges", ["#fde0d2", "#eb6834", "#7a2d0c"])
+
+fig, axes = plt.subplots(2, 3, figsize=(7.2, 5.0), layout="constrained")
+size = 7
+umap_panel(axes[0, 0], dmso_xy, dmso["time_point"], plate_colors, "a  Plate (time point)", size)
+umap_panel(axes[0, 1], dmso_xy, dmso["cell_line"], line_colors, "b  Cell line", size)
+umap_panel(axes[0, 2], dmso_xy, dmso_area, {"other DMSO wells": background, **plate_colors}, "c  CL1, odd rows of columns 1–6", size)
+for ax, colors in [(axes[0, 0], plate_colors), (axes[0, 1], line_colors), (axes[0, 2], {"other DMSO wells": background, **plate_colors})]:
+    ax.legend(handles=[Line2D([], [], marker="o", ls="", color=c, markersize=4, label=n) for n, c in colors.items()],
+              loc="upper center", bbox_to_anchor=(0.5, -0.02), ncols=2, handletextpad=0.2, columnspacing=0.8)
+for ax, values, cmap, norm, title, label in [
+    (axes[1, 0], dmso["log2_cells"].to_numpy(), plt.get_cmap("RdBu_r"), TwoSlopeNorm(0, -1.5, 1.5), "d  Cell number vs DMSO median", "log2(cells / DMSO median)"),
+    (axes[1, 1], dmso["wells_to_edge"].to_numpy(), blues.reversed(), Normalize(0, 7), "e  Distance to the plate edge", "wells to the edge"),
+    (axes[1, 2], dmso["minutes_after_start"].to_numpy(), oranges, Normalize(0, 230), "f  Imaging time", "minutes after the first well"),
+]:
+    # draw the most extreme wells last, so they are not covered
+    order = np.argsort(np.abs(norm(values) - 0.5)) if isinstance(norm, TwoSlopeNorm) else np.argsort(values)
+    points = ax.scatter(*dmso_xy[order].T, c=values[order], cmap=cmap, norm=norm, s=size, linewidths=0, rasterized=True)
+    ax.set(title=title, xticks=[], yticks=[])
+    ax.spines[["left", "bottom"]].set_visible(False)
+    fig.colorbar(points, ax=ax, location="bottom", shrink=0.8, aspect=25, pad=0.02, label=label, extend="both" if ax is axes[1, 0] else "neither")
+fig.suptitle(f"DMSO wells only ({dmso_adata.n_obs:,} wells): batch (top left) and technical factors")
+save_fig(fig, "02b_umap_dmso-wells")
+
+
+# In[9]:
+
+
+# how far each group of DMSO wells sits from the centre of the DMSO map, by plate, cell line and plate area
+centre = np.median(dmso_xy, axis=0)
+dmso = dmso.with_columns(umap_distance_from_centre=pl.Series(np.linalg.norm(dmso_xy - centre, axis=1)))
+dmso.group_by("time_point", "cell_line", "shifted_area").agg(
+    dmso_wells=pl.len(), median_umap_distance_from_centre=pl.col("umap_distance_from_centre").median().round(1),
 ).sort(pl.col("time_point").cast(pl.Enum(plate_order)), "cell_line", "shifted_area")
 
 
-# **Result:** 
+# **Result: FAIL: the DMSO wells form groups that follow technical factors.**
 # 
-# - **Biology (a–c).** Each cell line is normalized to its own DMSO wells, so the two lines overlap in most of the map. The 24h wells spread into arms (b). CBK600005 forms its own groups at the edge of the map (c); TGFβ1 and the other treatments mostly mix with DMSO.
-# - **Plate area (d).** The separate island at the top left is made of CL1 wells from the odd rows (A, C, … O) of columns 1–6 at 1h, DMSO and treated wells alike. These 47 wells lie 2.7 times further from the centre of the map than the other CL1 wells of the 1h plate (median 12.4 vs 4.6 UMAP units). The same wells at 4h and 24h sit at the edge of the main group (6.8 vs 4.0, and 7.1 vs 4.8). DMSO wells are in the island too, so it is not a treatment effect.
-# - **Cell number (e).** The arms at the bottom hold wells with fewer cells than DMSO (blue).
-# - **Plate edge (f).** Distance to the plate edge shows no pattern.
+# - **Plate (a).** The DMSO wells of the 3 plates mix: each plate was normalized to its own DMSO cells, so there is no overall shift between the batches.
+# - **Plate area (c).** The CL1 DMSO wells in the odd rows of columns 1–6 at 1h form their own island (right): they lie 2.9 times further from the centre of the map than the other CL1 DMSO wells of that plate (median 11.9 vs 4.1 UMAP units). At 4h and 24h the same wells sit at the edge of the main cloud (6.5 vs 3.8, and 6.7 vs 4.4).
+# - **Cell number (d).** The small groups at the top left are 24h DMSO wells with few cells (blue).
+# - **Imaging time (f).** Imaging time runs as a smooth gradient across the main cloud, from early (light) to late (dark) rows. Section 8b tests this gradient.
+# - **Cell line (b).** The two cell lines still separate partly, as expected, because they differ in biology even after each was normalized to its own DMSO wells.
 # 
-# ## 6. Where on the plate do the DMSO wells differ?
+# ## 7. Where on the plate do the DMSO wells differ?
 # 
 # The UMAP distorts distances, so from here on we measure them directly. For each plate and cell line, we rescale every feature to the spread between its DMSO wells (subtract the median DMSO well, divide by 1.4826 × MAD of the DMSO wells), so a value of 3 means "3 times the normal well-to-well variation of DMSO". The **distance from DMSO** of a well is the Euclidean length of its rescaled profile: 0 is the typical DMSO well. The same distance is used in notebook 03.
 # 
 # A DMSO well is **unusual** when its distance is above the median + 3 MAD of the DMSO wells of its plate and cell line. The maps show only the DMSO wells; treated wells are grey.
 
-# In[9]:
+# In[10]:
 
 
 raw = np.clip(agg_profiles.X.astype(np.float64), -clip_limit, clip_limit)
@@ -385,7 +418,7 @@ dmso_health.write_csv(table_dir / "dmso_unusual-wells.csv")
 dmso_health
 
 
-# In[10]:
+# In[11]:
 
 
 fig, axes = plt.subplots(3, 1, figsize=(3.6, 7.4), layout="constrained")
@@ -404,7 +437,7 @@ for ax, time in zip(axes, plate_order):
         ax.add_patch(Rectangle((c - 0.5, r - 0.5), 1, 1, facecolor=background, edgecolor="white", lw=0.3))
     for r, c in plate.filter(pl.col("unusual_dmso")).select("row_idx", "col_idx").iter_rows():
         ax.add_patch(Rectangle((c - 0.45, r - 0.45), 0.9, 0.9, fill=False, edgecolor="black", lw=0.9))
-    # the plate area of panel d above
+    # the plate area of panel c of the DMSO UMAP
     ax.add_patch(Rectangle((-0.5, -0.5), 6, 16, fill=False, edgecolor="#e34948", lw=0.8, ls=(0, (3, 2))))
     ax.axvline(11.5, color="black", lw=1.2)
     ax.set_xticks(range(24), [str(c) if c % 2 == 1 else "" for c in range(1, 25)])
@@ -434,7 +467,7 @@ save_fig(fig, "03_plate-maps_dmso-distance")
 # - **24h:** the unusual DMSO wells follow the low-count areas of notebook 02: columns 3–4 and rows M–N in CL1 (19 wells; median 1,110 vs 2,179 cells), and rows L–N in CL2 (22 wells; median 3,070 vs 3,651 cells).
 # - **CL2 at 1h and 4h** is nearly clean: 2 and 7 unusual wells, at 4h mostly at the right edge (columns 23–24).
 # 
-# ## 7. Which technical factors explain the DMSO differences?
+# ## 8. Which technical factors explain the DMSO differences?
 # 
 # We test each factor on the DMSO wells of each plate and cell line, with rank (Spearman) correlations from −1 to 1:
 # 
@@ -445,9 +478,11 @@ save_fig(fig, "03_plate-maps_dmso-distance")
 # | Imaging order | minutes after the first well | positive rho (drift) |
 # | Plate area (CL1 only) | odd rows of columns 1–6 vs the other CL1 DMSO wells | larger distance in the area (Mann–Whitney test) |
 # 
+# Section 8b adds a test for smooth gradients across the plate, which this distance test can miss.
+# 
 # **Pass if:** every correlation stays close to 0 (|rho| below about 0.3), and the plate area does not differ.
 
-# In[11]:
+# In[12]:
 
 
 factor_rows = []
@@ -468,7 +503,7 @@ factors.write_csv(table_dir / "dmso_technical-factors.csv")
 factors.with_columns(pl.selectors.starts_with("rho", "area_distance").round(2))
 
 
-# In[12]:
+# In[13]:
 
 
 fig, axes = plt.subplots(2, 3, figsize=(7.2, 4.4), layout="constrained", sharex=True, sharey=True)
@@ -483,11 +518,10 @@ for i, line in enumerate(line_order):
         ax.axhline(grp["distance_limit"][0], color="black", lw=0.6, ls="--")
         ax.axvline(0, color="#bdbdbd", lw=0.6, zorder=0)
         rho = factors.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))["rho_unusual_cell_number"].item()
-        ax.text(0.03, 0.97, f"rho = {rho:.2f}", transform=ax.transAxes, va="top", fontsize=6.5)
         ax.set_yscale("log")
         ax.set_yticks([20, 50, 100, 200, 400], ["20", "50", "100", "200", "400"])
         ax.minorticks_off()
-        ax.set_title(f"{line}, {time}")
+        ax.set_title(f"{line}, {time}   (rho = {rho:.2f})")
 for ax in axes[1]:
     ax.set_xlabel("cells vs DMSO median (log2)")
 for ax in axes[:, 0]:
@@ -502,20 +536,82 @@ fig.suptitle("DMSO wells: distance from the typical DMSO well vs cell number (rh
 save_fig(fig, "04_dmso_distance-vs-cell-number")
 
 
-# **Result:** **Plate area and cell number: H0 rejected. Plate edge and imaging order: H0 not rejected (one exception at 24h).**
+# ### 8b. Gradients across the plate
+# 
+# The distance test above only catches DMSO wells that sit *far* from the typical DMSO well. A smooth gradient, for example from the top rows to the bottom rows, puts wells on both sides of the centre (top rows on one side, bottom rows on the other), so their distance hardly changes and the test misses it. To catch gradients, we run a PCA on the DMSO wells of each plate and cell line (rescaled profiles) and correlate the top 5 principal components (PCs) with each factor. For each factor we report the PC it follows most (Spearman rho) and the share of the DMSO variation that this PC carries.
+# 
+# The plate was imaged row by row, so the row and the imaging time are one factor here; they cannot be separated.
+# 
+# **Pass if:** no factor follows a PC with |rho| ≥ 0.5.
+
+# In[14]:
+
+
+gradient_factors = {"row (= imaging order)": "row_idx", "column": "col_idx", "wells to the edge": "wells_to_edge", "cell number": "log2_cells"}
+gradient_rows = []
+for line in line_order:
+    for time in plate_order:
+        grp = wells.filter(pl.col("is_dmso") & (pl.col("cell_line") == line) & (pl.col("time_point") == time))
+        pca = PCA(n_components=5, random_state=seed).fit(profiles[grp["row"].to_numpy()])
+        pcs = pca.transform(profiles[grp["row"].to_numpy()])
+        for name, column in gradient_factors.items():
+            rhos = np.array([stats.spearmanr(grp[column], pcs[:, k]).statistic for k in range(5)])
+            k = int(np.argmax(np.abs(rhos)))
+            gradient_rows.append({
+                "cell_line": line, "time_point": time, "factor": name, "pc": f"PC{k + 1}",
+                "pct_variance_of_pc": 100 * pca.explained_variance_ratio_[k], "rho": rhos[k],
+            })
+gradients = pl.DataFrame(gradient_rows)
+gradients.write_csv(table_dir / "dmso_gradients.csv")
+gradients.with_columns(pl.col("pct_variance_of_pc").round(1), pl.col("rho").round(2))
+
+
+# In[15]:
+
+
+panels = [(line, time) for line in line_order for time in plate_order]
+names = list(gradient_factors)
+lookup = {(r["factor"], r["cell_line"], r["time_point"]): r for r in gradients.iter_rows(named=True)}
+matrix = np.array([[abs(lookup[(n, l, t)]["rho"]) for l, t in panels] for n in names])
+fig, ax = plt.subplots(figsize=(5.2, 2.2), layout="constrained")
+image = ax.imshow(matrix, cmap=blues, vmin=0, vmax=1, aspect="auto")
+for (r, c), v in np.ndenumerate(matrix):
+    hit = lookup[(names[r], *panels[c])]
+    ax.text(c, r, f"{hit['rho']:+.2f}\n{hit['pc']} ({hit['pct_variance_of_pc']:.0f}%)", ha="center", va="center", fontsize=5.5,
+            color="white" if v > 0.55 else "black", fontweight="bold" if v >= 0.5 else "normal")
+ax.set_xticks(range(len(panels)), [f"{l}\n{t}" for l, t in panels])
+ax.set_yticks(range(len(names)), names)
+ax.axvline(2.5, color="white", lw=2)
+ax.tick_params(length=0)
+ax.spines[:].set_visible(False)
+fig.colorbar(image, ax=ax, shrink=0.9, label="|Spearman rho|")
+ax.set_title("DMSO wells: strongest link of each factor with the top 5 PCs\n(rho, the PC, and the % of DMSO variation it carries; bold: |rho| ≥ 0.5)")
+save_fig(fig, "04b_dmso_gradients")
+
+
+# **Result (distance test):** **plate area and cell number: H0 rejected. Plate edge and imaging order: no effect on the distance, but section 8b finds a gradient with the row (= imaging order).**
 # 
 # - **Plate area:** in CL1, DMSO wells in the odd rows of columns 1–6 lie 3.7 times (1h, Mann–Whitney p = 2 × 10⁻¹⁷) and 1.9 times (4h, p = 6 × 10⁻¹⁵) further from the typical DMSO well than the other CL1 DMSO wells. At 24h the ratio is 1.4 (p = 0.0003), but this area overlaps the low-count block in columns 3–4, so the cause there is not clear. A pattern in every other row points to liquid handling (for example one channel of a multichannel dispenser), not to biology; the records do not show which step caused it.
 # - **Cell number:** DMSO wells whose cell number is further from the median differ more, on every plate: rho 0.30–0.32 at 1h, 0.51–0.57 at 4h and 0.60–0.66 at 24h. The scatter plots have a V shape: wells with fewer and with more cells both differ. At 24h, all DMSO wells far beyond the limit have fewer cells.
 # - **Plate edge:** rho −0.26 to 0.02, except CL1 at 24h (−0.37), where the low-count block lies inside the plate, so edge wells have more cells (notebook 02). This is the cell number effect, not an edge effect.
-# - **Imaging order:** rho −0.15 to −0.04 at 1h and 4h, so no drift during imaging. At 24h, rho is 0.28 (CL1) and 0.41 (CL2), but the rows imaged last (M–N) are also the low-count rows, so imaging order and cell number cannot be separated on this plate. Because the 1h and 4h plates show no drift, cell number is the more likely cause.
+# - **Imaging order:** rho −0.15 to −0.04 at 1h and 4h: DMSO wells imaged later are not *further* from the typical DMSO well. At 24h, rho is 0.28 (CL1) and 0.41 (CL2), but the rows imaged last (M–N) are also the low-count rows. This test cannot see a gradient that moves wells in one direction at the top of the plate and the other direction at the bottom; section 8b does.
 # 
-# ## 8. How many features follow cell number?
+# ### Result of 8b: gradients
+# 
+# **H0 rejected for cell number and for the row (= imaging order); weaker links with the edge and the column.**
+# 
+# - **Cell number** is the strongest gradient: it follows a large PC in every panel (|rho| 0.68–0.91; the PC carries 12–51% of the DMSO variation). In 4 of the 6 panels it is PC1 or PC2.
+# - **Row (= imaging order)** follows a PC in every panel. In CL2 it is a medium one (|rho| 0.58–0.74, PC2, 13–19% of the variation); in CL1 a small one (|rho| 0.48–0.72, PC4, 3–5%). So the DMSO profiles drift from the top rows to the bottom rows of the plate. Because the plate was imaged row by row, this can be a position effect (for example liquid handling or temperature across the plate) or a drift during the 3.8 hours of imaging; the data cannot tell the two apart.
+# - **Edge and column:** most of their strong links share a PC with cell number or with the odd-row area (CL1 at 1h: PC1, 69% of the variation, is the shifted area). On their own they follow only small PCs (3–10% of the variation; for example the edge in CL2 at 4h, rho −0.74 with PC3, 10%).
+# - The UMAP of section 6 shows the same: the imaging-time gradient in panel f, the low-count wells in panel d.
+# 
+# ## 9. How many features follow cell number?
 # 
 # For each plate and cell line, we compute the Spearman correlation of every feature with the cell number (log2 ratio) across the DMSO wells. A feature **follows cell number** when |rho| ≥ 0.5. Without any treatment, such a link can only come from density, or from what caused the density difference (seeding, handling).
 # 
 # **Pass if:** under about 10% of features follow cell number.
 
-# In[13]:
+# In[16]:
 
 
 groups = [(line, time) for line in line_order for time in plate_order]
@@ -543,7 +639,7 @@ summary.select("cell_line", "time_point", "n", pl.col("pct").round(1)).join(
 )
 
 
-# In[14]:
+# In[17]:
 
 
 row_names = ["All features", *category_order]
@@ -573,14 +669,14 @@ save_fig(fig, "05_dmso_features-following-cell-number")
 # - The top features reach |rho| 0.85–0.96, for example `Nuclei_Texture_InfoMeas2_CorrER_5_00_256` and `Cells_Correlation_RWC_CorrDNA_CorrER`.
 # - So a treatment that changes cell number will also change many features through density alone. Notebook 04 checks this for the treatments that lower cell number.
 # 
-# ## 9. Save the results
+# ## 10. Save the results
 # 
-# The UMAP coordinates (with metadata) and the distance of every well from DMSO, so other notebooks can use them without running this one.
+# The UMAP coordinates of the three maps (with metadata) and the distance of every well from DMSO, so other notebooks can use them without running this one.
 
-# In[15]:
+# In[18]:
 
 
-for adata, name in [(sc_sample, "qced_sc-sample"), (agg_profiles, "qced_wells")]:
+for adata, name in [(sc_sample, "qced_sc-sample"), (agg_profiles, "qced_wells"), (dmso_adata, "qced_dmso-wells")]:
     metadata_columns = [column for column in adata.obs.columns if column.startswith("Metadata_")]
     table = pl.from_pandas(adata.obs[metadata_columns].astype(str).reset_index(drop=True)).with_columns(
         pl.Series("UMAP1", adata.obsm["X_umap"][:, 0]), pl.Series("UMAP2", adata.obsm["X_umap"][:, 1])
@@ -599,16 +695,17 @@ wells.select(
 # 
 # **Biology:** cell line and time point drive the largest differences between single cells. Among the treatments, CBK600005 stands apart from DMSO; the others mostly mix with DMSO.
 # 
-# **Batch effects found (H0 rejected):**
+# **Batch effects found in the DMSO wells (H0 rejected):**
 # 
 # | Batch effect | Where | Evidence | What to do |
 # |---|---|---|---|
 # | **Plate area** | CL1, odd rows of columns 1–6, at 1h (strong) and 4h (weaker) | 33 (1h) and 11 (4h) of 127 DMSO wells are unusual, all in this area; 3.7× and 1.9× further from the typical DMSO well; the wells form their own UMAP island | Flag treated wells in this area (notebook 03 marks them †); check the liquid handling of these rows |
 # | **Cell number** | every plate, strongest at 24h | DMSO distance follows cell number (rho 0.30–0.66); 23–59% of features follow cell number | Compare wells with DMSO wells of similar cell number, or correct for cell number; read the profiles of treatments that lower cell number with care (notebook 04) |
 # | **Low-count areas** | 24h plate: CL1 columns 3–4 and rows M–N; CL2 rows L–N | 19 (CL1) and 22 (CL2) unusual DMSO wells with fewer cells | Seeding or handling problem (notebook 02); the same as the cell number effect |
+# | **Row gradient (= imaging order)** | every plate, clearest in CL2 | a PC of the DMSO wells follows the row (\|rho\| 0.58–0.74, 13–19% of the DMSO variation in CL2; 3–5% in CL1) | Randomize the layout so treatments are not tied to rows; put DMSO wells in every row; consider a row-wise correction |
 # 
-# **Not batch effects (H0 not rejected):** distance to the plate edge (|rho| ≤ 0.26, apart from the low-count block) and imaging order (|rho| ≤ 0.15 at 1h and 4h).
+# **Weak or not batch effects:** distance to the plate edge and the column have little effect on their own (they follow only small PCs, 3–10% of the DMSO variation, or share a PC with cell number). The plates as a whole do not differ, because each is normalized to its own DMSO cells.
 # 
 # **Cannot be tested with this design:** time point and imaging settings (the 24h plate used longer ER and AGP exposures) are confounded, and so are cell line and plate half (CL1 always in columns 1–12). All comparisons are therefore made within one plate and cell line.
 # 
-# **Output:** UMAP coordinates in `results/umap_qced_*.parquet`; the distance from DMSO and technical factors of every well in `results/tables/01.batch-effects-diagnosis/well_distance-and-technical-factors.csv`; figures in `results/figures/01.batch-effects-diagnosis/`.
+# **Output:** UMAP coordinates in `results/umap_qced_*.parquet` (single cells, all wells, DMSO wells); the distance from DMSO and technical factors of every well in `results/tables/01.batch-effects-diagnosis/well_distance-and-technical-factors.csv`; the gradient test in `dmso_gradients.csv`; figures in `results/figures/01.batch-effects-diagnosis/`.
