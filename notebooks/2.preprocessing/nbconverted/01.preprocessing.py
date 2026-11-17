@@ -129,18 +129,17 @@ metadata_columns = [name for name in schema.names() if name.startswith("Metadata
 compartment_columns = [name for name in schema.names() if name.startswith(compartments) and not any(word in name for word in non_measurement_columns)]
 passed = (pl.col("Metadata_image_qc") == "pass") & (pl.col("Metadata_profile_qc") == "pass")
 
-print(
-    in_order(
-        pl.scan_parquet(qc_profile_path)
-        .group_by("Metadata_cell_line", "Metadata_time_point")
-        .agg(pl.len().alias("all cells"), passed.sum().alias("pass QC (qced)"), (100 * passed.mean()).round(1).alias("% pass"))
-        .collect()
-    )
+qc_counts = in_order(
+    pl.scan_parquet(qc_profile_path)
+    .group_by("Metadata_cell_line", "Metadata_time_point")
+    .agg(pl.len().alias("all cells"), passed.sum().alias("pass QC (qced)"), (100 * passed.mean()).round(1).alias("% pass"))
+    .collect()
 )
 
 # features are stored as 32-bit numbers, which halves the memory and keeps 7 significant digits
 cells = pl.scan_parquet(qc_profile_path).select(*metadata_columns, *[pl.col(name).cast(pl.Float32) for name in compartment_columns]).collect()
 print(f"{cells.height:,} cells, {len(metadata_columns)} metadata columns, {len(compartment_columns):,} compartment columns")
+qc_counts
 
 
 # **Result:** 2,647,721 cells in total. 2,185,564 of them pass both QC checks (73.1–88.9% per plate and cell line).
@@ -228,7 +227,7 @@ for name, profile in profiles.items():
         .with_columns(pl.lit(name).alias("profiles"))
     )
     print(f"{name}: {profile.n_obs:,} cells, {profile.n_vars:,} features")
-print(in_order(pl.concat(rows).select("profiles", pl.exclude("profiles"))))
+in_order(pl.concat(rows).select("profiles", pl.exclude("profiles")))
 
 
 # **Result: PASS.** Every cell has a perturbation, and the plate map agrees with the QC treatment in every well. Each plate and cell line has 22 perturbations: DMSO, 5 compounds at 3 doses, and 2 ligands at 3 doses. The DMSO controls number 232,164–450,511 cells per plate and cell line in the all-cells set, and 181,683–397,451 in the QCed set.
@@ -268,7 +267,7 @@ for name, profile in profiles.items():
             }
         )
     print(f"{name}: features that cannot be scaled in at least one group (no spread in its DMSO cells): {int(profile.var['degenerate_scale'].sum())}")
-print(in_order(pl.DataFrame(rows)))
+in_order(pl.DataFrame(rows))
 
 
 # **Result: PASS.** In every plate and cell line, the DMSO cells end at a median of 0 and a spread of 1. 146 features (all cells) and 150 (QCed) have no spread in the DMSO cells of at least one plate and cell line, so they cannot be scaled; feature selection drops them.
@@ -315,12 +314,17 @@ for name in set_order:
         pl.concat([kept.group_by("object").len().rename({"object": "group"}), kept.group_by("channel").len().rename({"channel": "group"})]).with_columns(pl.lit(name).alias("profiles"))
     )
 
-print("Features each operation would drop on its own (an operation can drop the same feature as another):")
-print(pl.DataFrame(dropped))
-print("Kept features per compartment and per channel:")
-print(pl.concat(kept_by_group).pivot(on="profiles", index="group", values="len").sort("group"))
 shared = set(profiles["all cells"].var_names) & set(profiles["qced"].var_names)
 print(f"Features kept in both sets: {len(shared):,}")
+# features each operation would drop on its own (an operation can drop the same feature as another)
+pl.DataFrame(dropped)
+
+
+# In[7]:
+
+
+# kept features per compartment and per channel
+pl.concat(kept_by_group).pivot(on="profiles", index="group", values="len").sort("group")
 
 
 # **Result: PASS.** Of 3,052 features, 1,394 are kept for all cells and 1,399 for the QCed cells (1,326 in both). Most dropped features repeat another one (correlation: 1,421). The extreme-value filter alone would drop 319 and 295 features, many of which another filter also drops. The kept features cover the 3 compartments and all 5 channels (204–243 features per channel).
@@ -331,7 +335,7 @@ print(f"Features kept in both sets: {len(shared):,}")
 # 
 # **Pass if:** only a few wells fail, and only for a clear reason.
 
-# In[7]:
+# In[8]:
 
 
 rows = []
@@ -361,7 +365,7 @@ for name in set_order:
     print(f"{name}: {failed.height} of {table.height} wells fail well QC")
     rows.append(failed.select(pl.lit(name).alias("profiles"), "Metadata_Plate", "Metadata_Well", "n_cells", pl.col("nan_fraction").round(3), "Metadata_well_qc_reason"))
 pl.Config.set_fmt_str_lengths(45)
-print(pl.concat(rows))
+pl.concat(rows)
 
 
 # **Result: PASS.** No well fails in the all-cells set. In the QCed set, 4 of 1,140 wells fail, all on the 24h plate in CL1 and all for having fewer than 100 cells: L04 (89), N03 (76), N08 (62) and N10 (39). They lie in the low-count area of that plate. They keep their profile, flagged `fail`.
@@ -372,7 +376,7 @@ print(pl.concat(rows))
 # 
 # **Pass if:** every imaged well of the 3 plates gets a profile, in both sets.
 
-# In[8]:
+# In[9]:
 
 
 wells = {name: mp.tl.aggregate(profiles[name], by=aggregate_by, func="median") for name in set_order}
@@ -386,7 +390,7 @@ for name, well_profile in wells.items():
         .with_columns(pl.lit(name).alias("profiles"))
     )
     print(f"{name}: {well_profile.n_obs:,} well profiles, {well_profile.n_vars:,} features")
-print(in_order(pl.concat(rows).select("profiles", pl.exclude("profiles"))))
+in_order(pl.concat(rows).select("profiles", pl.exclude("profiles")))
 
 
 # **Result: PASS.** Each set has 1,140 well profiles, 190 per plate and cell line. A QCed well holds a median of 1,490–3,186 cells, depending on the plate and cell line; the fewest is 39 (24h, CL1), a well that fails well QC.
@@ -397,7 +401,7 @@ print(in_order(pl.concat(rows).select("profiles", pl.exclude("profiles"))))
 # 
 # **Pass if:** each file holds the 3 plates, the expected rows, and its set's features.
 
-# In[9]:
+# In[10]:
 
 
 def save(adata_to_save, path):
@@ -429,7 +433,7 @@ for name in set_order:
             }
         )
 pl.Config.set_fmt_str_lengths(60)
-print(pl.DataFrame(rows))
+pl.DataFrame(rows)
 
 
 # **Result: PASS.** Every file holds the 3 plates. The single-cell files hold 2,647,721 and 2,185,564 cells, the well files 1,140 wells each. In the single-cell files, 520 (all cells) and 512 (QCed) features are missing in some cells; the well files have no missing values.
