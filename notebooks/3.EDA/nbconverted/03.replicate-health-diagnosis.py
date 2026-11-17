@@ -237,6 +237,8 @@ meta = meta.with_columns(pl.Series("distance", np.linalg.norm(profiles, axis=1))
 # 
 # **Negative control check:** sets of 3 random DMSO wells should beat the threshold only about 5% of the time.
 # 
+# **How to read the figure:** each panel has the null on top (grey) and, below it, one row per agent with one dot per dose (light and small = low dose, dark and large = high dose). A dot right of the dashed line, with a black outline, is a treatment whose wells agree more than chance.
+# 
 # **Pass if:** DMSO sets pass about 5% of the time, and treatments pass more often than that.
 
 # In[6]:
@@ -364,6 +366,46 @@ print(
 # In[8]:
 
 
+# figure: mAP against DMSO for every treatment and dose, per plate and cell line
+# grey band = chance level: the mAP range of the 20 fake treatments made of random DMSO wells (same panel)
+y_of = {p: i for i, p in enumerate(perturbation_order)}
+fig, axes = plt.subplots(2, 3, figsize=(7.2, 6.6), sharex=True, sharey=True, layout="constrained")
+for i, line in enumerate(line_order):
+    for j, time in enumerate(plate_order):
+        ax = axes[i, j]
+        sub = scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))
+        fake = fake_scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))["mAP"].to_numpy()
+        ax.axvspan(0, fake.max(), color="#e6e6e6", lw=0, zorder=0)
+        y = np.array([y_of[p] for p in sub["perturbation"]])
+        x = sub["mAP"].to_numpy()
+        colors = np.array([well_type_colors[w] for w in sub["well_type"]])
+        active = sub["active"].to_numpy()
+        # filled = active (q < 0.05), hollow = not active
+        ax.scatter(x[active], y[active], s=14, c=colors[active], linewidths=0, zorder=3)
+        ax.scatter(x[~active], y[~active], s=14, facecolors="white", edgecolors=colors[~active], linewidths=0.8, zorder=3)
+        ax.set_title(f"{line}, {time}  ({active.sum()} of {sub.height} active)")
+        ax.grid(axis="y", color="#f0f0f0", lw=0.5, zorder=0)
+        if i == 1:
+            ax.set_xlabel("mAP against DMSO")
+axes[0, 0].set_yticks(range(len(perturbation_order)), [pretty(p) for p in perturbation_order])
+axes[0, 0].invert_yaxis()
+axes[0, 0].set_xlim(-0.02, 1.02)
+for ax in axes.flat:
+    ax.tick_params(axis="y", labelsize=5.5)
+handles = [
+    Patch(color="#e6e6e6", label="chance: mAP of fake DMSO treatments"),
+    Line2D([], [], marker="o", ls="", color=well_type_colors["compound"], markersize=4, label="compound, active (q < 0.05)"),
+    Line2D([], [], marker="o", ls="", color=well_type_colors["ligand"], markersize=4, label="ligand, active (q < 0.05)"),
+    Line2D([], [], marker="o", ls="", markerfacecolor="white", markeredgecolor="black", markersize=4, label="not active"),
+]
+fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.05), ncols=4)
+fig.suptitle("Which treatments differ from DMSO? mAP of each treatment and dose")
+save_figure(fig, "02b_map-against-dmso")
+
+
+# In[9]:
+
+
 # one summary row per plate and cell line
 panel_summary = []
 for time, line in panels:
@@ -382,7 +424,82 @@ panel_summary.write_csv(table_dir / "panel_summary.csv")
 panel_summary.with_columns(pl.selectors.float().round(1))
 
 
-# In[9]:
+# In[10]:
+
+
+# figure: replicate correlation of each treatment against the null, per plate and cell line
+# top of each panel: the null; below it: one row per agent, one dot per dose
+dose_sizes = [6, 14, 26]
+dose_shades = {"compound": ["#a8e3cc", "#1baf7a", "#0b5e40"], "ligand": ["#f4b6b6", "#d03b3b", "#7a1a1a"]}
+# within an agent row, low dose sits on top and high dose at the bottom
+dose_offsets = [-0.25, 0.0, 0.25]
+bins = np.linspace(-1, 1, 41)
+fig = plt.figure(figsize=(7.2, 6.4))
+outer = fig.add_gridspec(2, 3, hspace=0.32, wspace=0.08)
+first_hist = first_dots = None
+for j, time in enumerate(plate_order):
+    for i, line in enumerate(line_order):
+        inner = outer[i, j].subgridspec(2, 1, height_ratios=[1, 1.35], hspace=0.06)
+        ax_hist = fig.add_subplot(inner[0], sharex=first_hist, sharey=first_hist)
+        ax_dots = fig.add_subplot(inner[1], sharex=ax_hist, sharey=first_dots)
+        first_hist, first_dots = first_hist or ax_hist, first_dots or ax_dots
+        threshold = corr_thresholds[(time, line)]
+        sub = scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))
+
+        # top: the null, the DMSO check and the threshold
+        ax_hist.hist(null_scores[(time, line)], bins=bins, density=True, color="#d9d9d9")
+        ax_hist.hist(dmso_scores[(time, line)], bins=bins, density=True, histtype="step", color="#595959", lw=0.8)
+        ax_hist.axvline(threshold, ls="--", color="black", lw=0.6)
+        ax_hist.text(threshold + 0.03, 0.95, "replicates →", transform=ax_hist.get_xaxis_transform(), va="top", fontsize=5.5)
+        ax_hist.set_title(f"{time}, {line}: {sub['replicating'].sum()} of {sub['replicating'].count()} replicate")
+        ax_hist.tick_params(labelbottom=False)
+        if j == 0:
+            ax_hist.set_ylabel("density")
+        else:
+            ax_hist.tick_params(labelleft=False)
+
+        # bottom: one row per agent, one dot per dose
+        ax_dots.axvspan(threshold, 1.05, color="#f2f2f2", zorder=0)
+        ax_dots.axvline(threshold, ls="--", color="black", lw=0.6)
+        for k in range(len(agent_order) - 1):
+            ax_dots.axhline(k + 0.5, color="#bdbdbd" if agent_order[k + 1] in ligands and agent_order[k] not in ligands else "#e6e6e6", lw=0.5, zorder=1)
+        for r in sub.filter(pl.col("replicate_corr").is_not_null()).iter_rows(named=True):
+            level = r["dose_level"]
+            ax_dots.scatter(
+                r["replicate_corr"], agent_order.index(r["agent"]) + dose_offsets[level],
+                s=dose_sizes[level], color=dose_shades[r["well_type"]][level], marker="o" if r["n_wells"] == 3 else "s",
+                edgecolor="black" if r["replicating"] else "white", lw=0.7 if r["replicating"] else 0.3, zorder=3,
+            )
+        ax_dots.set_yticks(range(len(agent_order)), agent_order)
+        ax_dots.set_ylim(len(agent_order) - 0.5, -0.5)
+        ax_dots.tick_params(axis="y", length=0, labelleft=j == 0)
+        ax_dots.set_xlim(-1.05, 1.05)
+        if i == 1 and j == 1:
+            ax_dots.set_xlabel("replicate correlation (median Pearson r of the 3 wells)")
+
+line_handles = [
+    Patch(color="#d9d9d9", label="null: 3 wells of different treatments"),
+    Line2D([], [], color="#595959", lw=0.8, label="3 random DMSO wells"),
+    Line2D([], [], color="black", ls="--", lw=0.6, label="95th percentile of the null"),
+    Line2D([], [], marker="o", ls="", markerfacecolor="white", markeredgecolor="black", markersize=4, label="black outline: replicates"),
+]
+if (scores["n_wells"] == 2).any():
+    line_handles.append(Line2D([], [], marker="s", ls="", color="#9e9e9e", markersize=3.5, label="square: 2 wells left after well QC"))
+dose_handles = [
+    Line2D([], [], marker="o", ls="", color=dose_shades[kind][level], markersize=np.sqrt(dose_sizes[level]), label=dose_text[dose])
+    for kind, doses in (("compound", ["0.2", "0.67", "2.0"]), ("ligand", ["L", "M", "H"]))
+    for level, dose in enumerate(doses)
+]
+fig.legend(handles=line_handles, loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(0.5, -0.04))
+fig.legend(
+    handles=dose_handles, loc="lower center", ncol=6, frameon=False, bbox_to_anchor=(0.5, -0.12),
+    title="dose: compounds (stock concentration, green) and ligands (red)",
+)
+fig.suptitle("Do replicate wells agree more than random wells?", y=0.95)
+save_figure(fig, "01_replicate-correlation-vs-null")
+
+
+# In[11]:
 
 
 # which doses replicate, per agent, plate and cell line ("–" = no dose)
@@ -404,7 +521,7 @@ replicating_doses.write_csv(table_dir / "replicating_doses.csv")
 replicating_doses
 
 
-# In[10]:
+# In[12]:
 
 
 # the wells behind each replicating treatment
@@ -416,7 +533,7 @@ scores.filter(pl.col("replicating")).sort(
 )
 
 
-# In[11]:
+# In[13]:
 
 
 # figure: summary of reproducibility and activity, with the DMSO checks
@@ -472,7 +589,7 @@ save_figure(fig, "02_reproducibility-summary")
 # 
 # **Pass if:** unusual DMSO wells are few and scattered, not grouped in one area of the plate.
 
-# In[12]:
+# In[14]:
 
 
 dmso_rows, unusual_profile, distance_limits = [], {}, {}
@@ -519,7 +636,7 @@ dmso_health.with_columns(pl.selectors.float().round(2))
 # 
 # We also give each well's cell count, its plate position, and its correlation with the unusual DMSO wells of 3a ("looks like unusual DMSO" when r ≥ 0.8), which helps to tell a technical problem from biology.
 
-# In[13]:
+# In[15]:
 
 
 health_rows = []
@@ -588,7 +705,7 @@ outliers.select(
 )
 
 
-# In[14]:
+# In[16]:
 
 
 # figure: the 3 replicate wells of each treatment, by distance from the DMSO centre
@@ -653,7 +770,7 @@ save_figure(fig, "04_replicate-spread-and-outliers")
 # 
 # **Pass if:** every active treatment (mAP) is further from DMSO than a typical set of 3 random DMSO wells (strength above 1).
 
-# In[15]:
+# In[17]:
 
 
 strength_rows, set_typical = [], {}
@@ -688,7 +805,7 @@ scores = scores.join(
 ).with_columns((pl.col("corr_with_unusual_dmso") >= artifact_corr).fill_null(False).alias("looks_like_unusual_dmso"))
 
 
-# In[16]:
+# In[18]:
 
 
 # table: strength and activity of every treatment
@@ -706,7 +823,7 @@ strength_table.filter(pl.col("active") | pl.col("looks_like_unusual_dmso")).sele
 )
 
 
-# In[17]:
+# In[19]:
 
 
 # figure: strength heatmap per cell line (rows: treatment x dose, columns: time point)
@@ -749,7 +866,7 @@ save_figure(fig, "05_phenotypic-strength-heatmap")
 # 
 # The strength heatmap above shows each agent across the 3 doses and 3 time points. To test for a **dose response**, we correlate the distance of each of the 9 wells (3 doses × 3 replicates, fewer when a well failed QC) from the DMSO centre with the dose rank (Spearman ρ), per plate and cell line, and correct for the 42 tests (Benjamini–Hochberg). Time and exposure settings cannot be separated, so a trend in time can also come from the longer ER and AGP exposures of the 24h plate.
 
-# In[18]:
+# In[20]:
 
 
 dose_rows = []
@@ -780,7 +897,7 @@ dose_response.filter(pl.col("pvalue") < 0.05).sort("agent", "cell_line", "time_p
 # 
 # We take the consensus profiles of the active treatments (mAP q < 0.05) and correlate every pair (Pearson r over all features). Treatments with a similar effect on the cells correlate strongly; the clustering puts them next to each other. Treatments marked † look like the unusual DMSO wells of their plate (section 3a).
 
-# In[19]:
+# In[21]:
 
 
 active = scores.filter(pl.col("active")).sort("agent", "cell_line", "time_point", "dose_level")
@@ -812,7 +929,7 @@ for r, a, b in pairs:
     print(f"  r = {r:.2f}: {a}  vs  {b}")
 
 
-# In[20]:
+# In[22]:
 
 
 # figure: clustered correlation heatmap of the active consensus profiles
@@ -847,7 +964,7 @@ save_figure(grid.figure, "07_active-treatment-similarity")
 # 
 # For the strongest active treatment of each agent and cell line (leaving out †), we average the absolute rescaled values of the consensus profile within each compartment × channel group (e.g. all cytoplasm ER features). Shape features have no channel; colocalization features use two channels.
 
-# In[21]:
+# In[23]:
 
 
 var = adata.var.reset_index()
@@ -877,7 +994,7 @@ feature_groups.write_csv(table_dir / "feature_group_change_top_active.csv")
 print("features per group:", {g: int((group_of == g).sum()) for g in group_order})
 
 
-# In[22]:
+# In[24]:
 
 
 # figure: mean absolute change per compartment x channel for the strongest active treatments
@@ -907,7 +1024,7 @@ save_figure(fig, "08_feature-groups-strongest-treatments")
 # - No two different compounds look alike: the most similar pair of different agents reaches only r = 0.50 (CBK175924 2 mM 1h CL2 vs TGFβ1 10 ng/ml 24h CL2). TGFβ1 in CL2 shares part of its profile with CBK600005 at 24h in CL2 (median r = 0.42).
 # - Feature groups: CBK600005 at 24h changes nuclear DNA and AGP features most in CL2 (mean |change| 9.0 and 8.7) and cell and nuclear shape in CL1 (5.1); CBK200566 mainly DNA features (2.7 in CL1; nuclear DNA 5.6 and shape 5.0 in CL2); TGFβ1 mostly ER and AGP (2.7–3.2); CBK041498 and CBK175924 in CL2 mostly Mito (2.8–3.3). ER and AGP changes at 24h may partly reflect the longer exposures of that plate, although every comparison is against DMSO of the same plate.
 
-# In[23]:
+# In[25]:
 
 
 # the main table: one row per treatment x plate x cell line
