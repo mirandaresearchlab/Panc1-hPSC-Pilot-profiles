@@ -1,0 +1,39 @@
+[project]
+name = "panc1-hpsc-pilot-profiles"
+version = "0.1.0"
+description = "PALS cellprofiler profiles preprocessing"
+readme = "README.md"
+authors = [
+    { name = "axiomcura", email = "erik.serrano@scilifelab.se" }
+]
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "cosmicqc>=1.1.2",
+    "cytodataframe[all]>=0.3.6",
+    "cytotable>=1.2.6",
+    "mantispy[map]>=0.1.0a3",
+    "matplotlib>=3.11.2",
+    "plotly>=7.1.0",
+    "polars>=2.1.0",
+    "pycytominer>=1.7.1",
+    "scanpy>=1.12.5",
+    "seaborn>=0.13.2",
+    "statsmodels>=0.15.0",
+]
+
+[project.scripts]
+panc1-hpsc-pilot-profiles = "panc1_hpsc_pilot_profiles:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "nbconvert>=7.17.2",
+    "papermill>=2.7.0",
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]

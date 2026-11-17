@@ -218,3 +218,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# prototype or HPC specific files
+_*
+
+# ignore large files
+data/
+results/
+report/
+
+# notebook results: large tables, caches and temporary files stay out of git
+notebooks/*/results/**/*.parquet
+notebooks/*/results/cache/
+notebooks/*/tmp/
+
+# ignore large log files
+*.log
+.claude/
