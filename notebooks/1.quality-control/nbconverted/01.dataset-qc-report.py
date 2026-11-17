@@ -3,19 +3,19 @@
 
 # # Dataset QC report: are the CellProfiler outlines good enough?
 # 
-# This report checks the whole dataset at once: the images, the cell outlines and the features. Each check gets a grade, and the scorecard in section 8 collects them. Notebook 02 (`02.qc.ipynb`) then checks each image and each cell, and marks the ones to remove.
+# **Question:** are the CellProfiler outlines good enough to use these single-cell profiles? Or should we run CellProfiler again with other settings?
 # 
-# **Question:** are the CellProfiler outlines good enough to use these single-cell profiles, or should we run CellProfiler again with other settings?
+# This report checks the whole dataset at once: the images, the cell outlines and the features. Each check gets a grade, and the scorecard in section 8 collects the grades. Notebook 02 (`02.qc.ipynb`) then checks each image and each cell, and marks the ones to remove.
 # 
 # **Answer: the outlines are good enough, so we keep these profiles. One problem remains: in CL1, many touching nuclei are merged into one object. Notebook 02 flags these cells.**
 # 
-# - **Lighting is even** across each image. Blurred and over-exposed images are flagged one by one in notebook 02 (`02.qc.ipynb`).
-# - **Nuclei are not cut into pieces.** Only 0.2–0.4% (CL1) and 2.0–3.1% (CL2) of nuclei hold too little DNA, and both cell lines show the expected G1 and G2 DNA peaks.
-# - **CL1 has merged nuclei.** 14–28% of CL1 objects hold more DNA than one nucleus can. The scorecard does not test for this; section 6.3 shows it, and notebook 02 flags these cells.
+# - **Lighting is even** across each image. Notebook 02 flags blurred and over-exposed images one by one.
+# - **Nuclei are not cut into pieces.** Only 0.2–0.4% (CL1) and 2.0–3.1% (CL2) of nuclei hold too little DNA. Both cell lines show the expected G1 and G2 DNA peaks.
+# - **CL1 has merged nuclei.** 14–28% of CL1 objects hold more DNA than one nucleus can. The scorecard does not test for this. Section 6.3 shows it, and notebook 02 flags these cells.
 # - **Cell outlines are mostly good.** They hold 80–91% of the cell-body stain. CL2 outlines are slightly ragged at 1h and 4h.
 # - **Features are usable.** All 3,041 features have at most 0.1% missing values, and none is constant.
 # 
-# Cell numbers across the plate, replicate agreement and the TGFβ1 positive control are tested on the QCed profiles in `3.EDA` (notebooks 02, 03 and 01).
+# The `3.EDA` notebooks test the QCed profiles further: the cell numbers across the plate (notebook 02), the batch effects (notebook 01), and the replicate agreement and activity (notebook 03).
 # 
 # | Term | Meaning |
 # |---|---|
@@ -30,7 +30,7 @@
 # 
 # ## Setup
 # 
-# Run with `_run.sbatch` (about 200 GB of memory the first time). Slow steps are saved in `results/cache`; delete the folder to recompute them.
+# Run with `_run.sbatch` (about 200 GB of memory the first time). The notebook saves slow steps in `results/cache`. Delete the folder to compute them again.
 
 # In[1]:
 
@@ -140,11 +140,14 @@ def score(name, value, group="All"):
 
 # ## When would we run CellProfiler again?
 # 
-# We run CellProfiler again if two things are true. First, a segmentation check (6.2–6.5) fails in at least half of the 6 plate and cell line groups. Second, the image check in 6.4 confirms the cause.
+# We run CellProfiler again only if two things are true:
 # 
+# 1. A segmentation check (6.2–6.5) fails in at least half of the 6 plate and cell line groups.
+# 2. The image check in 6.4 confirms the cause.
+
 # ## 1. Experiment design
 # 
-# Three plates (1h, 4h and 24h after treatment) share one layout. We check that every well has a clear label.
+# Three plates (1h, 4h and 24h after treatment) share one layout. We check that every well has a clear label, and read the imaging settings of each plate.
 
 # In[4]:
 
@@ -229,16 +232,20 @@ for time in plate_order:
 pl.DataFrame(settings)
 
 
-# **Result**
+# **Result: PASS (every well has a label).**
 # 
-# - 5 compounds and 2 ligands (TGFβ1, IL6), each at 3 doses, with 3 replicate wells per cell line and plate. Each cell line has 127 imaged DMSO control wells.
-# - **Cell line follows plate side** (CL1 in columns 1–12, CL2 in 13–24), so the two cannot be separated.
-# - **The 24h plate used longer exposures** for ER (200 vs 100 ms) and AGP (90 vs 80 ms). Compare each well only with the DMSO wells of its own plate.
-# - `parameters.json` names the cell line `MDA-MB-231_wt_ko`, which does not match the plate names (Panc1, hPSC). Which line is CL1 is not recorded.
-# 
+# - The plates hold 5 compounds and 2 ligands (TGFβ1, IL6), each at 3 doses, with 3 replicate wells per cell line and plate. Each cell line has 127 imaged DMSO control wells.
+# - **Cell line follows plate side** (CL1 in columns 1–12, CL2 in 13–24). So the data cannot separate the two.
+# - **The 24h plate used longer exposures** for ER (200 vs 100 ms) and AGP (90 vs 80 ms). So we compare each well only with the DMSO wells of its own plate.
+# - `parameters.json` names the cell line `MDA-MB-231_wt_ko`, which does not match the plate names (Panc1, hPSC). The files do not record which line is CL1.
+
 # ## 2. Load the data
 # 
-# We load about 30 key columns for all 2.6 million cells, the image-level columns of every site, and 100 random cells per well (with all features).
+# We load three inputs:
+# 
+# 1. about 30 key columns for all 2.6 million cells.
+# 2. the image-level columns of every site.
+# 3. 100 random cells per well, with all features.
 
 # In[6]:
 
@@ -344,15 +351,18 @@ score("Missing sites (%)", completeness["missing_pct"].max())
 completeness
 
 
-# **Result: PASS.** All 3,420 sites per plate were processed, with no errors. Three sites on the 24h plate (wells M04, N09, N12) have no cells left. They lie in the CL1 area with few cells (see the cell count maps in `3.EDA/02.explore-metadata.ipynb`). In total, the data holds 2,647,721 cells.
+# **Result: PASS.**
 # 
+# - CellProfiler processed all 3,420 sites per plate, with no errors. In total, the data hold 2,647,721 cells.
+# - Three sites on the 24h plate (wells M04, N09, N12) have no cells left. They lie in the CL1 area with few cells (see the cell count maps in `3.EDA/02.explore-metadata.ipynb`).
+
 # ## 4. Are the images sharp and not over-exposed?
 # 
-# Notebook 02 (`02.qc.ipynb`) now checks this for each image, and flags blurred and over-exposed images in the QC profile.
+# Notebook 02 (`02.qc.ipynb`) checks this for each image. It flags blurred and over-exposed images in the QC profile.
 
 # ## 5. Is the lighting even across each image?
 # 
-# A cell's brightness should not depend on where it sits in the image.
+# The brightness of a cell should not depend on where it sits in the image. We split each image into a 5 × 5 grid, and compare the median brightness of the control cells in each grid square.
 # 
 # **Pass if:** the brightest and dimmest parts of the image differ by less than 1.2-fold.
 
@@ -389,15 +399,15 @@ for row in ratios.group_by("channel").agg(pl.col("ratio").max()).sort("channel")
     score("Brightness change across the field (max/min)", row["ratio"], row["channel"])
 
 
-# **Result: PASS.** They differ by at most 1.12-fold, so the illumination correction works.
-# 
+# **Result: PASS.** The brightest and dimmest parts differ by at most 1.12-fold, so the illumination correction works. The corners, mostly the bottom right, are slightly brighter on the 4h plate.
+
 # ## 6. Are nuclei and cells outlined correctly?
 # 
-# This is the key section. Features are only right if the outlines are right. A nucleus cut in two becomes two false cells, and two merged nuclei become one false cell.
+# This is the key section, because features are only right if the outlines are right. A nucleus cut in two becomes two false cells. Two merged nuclei become one false cell.
 # 
 # ### 6.1 Look at the outlines
 # 
-# Control wells with a typical cell count. Red = AGP, green = ER, blue = DNA. White = nucleus outline, yellow = cell outline.
+# The images show control wells with a typical cell count. Red = AGP, green = ER, blue = DNA. White = nucleus outline, yellow = cell outline.
 
 # In[11]:
 
@@ -461,7 +471,7 @@ plt.show()
 
 
 # **Result:** nuclei have one smooth outline each, and cell outlines reach the dim edge of the cell. In the dense CL1 clumps at 24h, we cannot see by eye whether each nucleus has its own outline (see 6.3).
-# 
+
 # ### 6.2 Do nuclei fit the allowed size range?
 # 
 # CellProfiler removes objects outside 30–120 pixels in diameter.
@@ -499,11 +509,15 @@ for row in near_limit.iter_rows(named=True):
 near_limit
 
 
-# **Result: PASS.** At most 0.5% of nuclei are near the upper limit. The median diameter is 50–54 pixels in CL1 and 61–67 pixels in CL2. The CL1 24h curve has an extra shoulder at about 55–70 pixels, which merged nuclei would give.
+# **Result: PASS.**
 # 
+# - At most 0.5% of nuclei are near the upper limit.
+# - The median diameter is 50–54 pixels in CL1 and 61–67 pixels in CL2.
+# - The CL1 24h curve has an extra shoulder at about 55–70 pixels. Merged nuclei would give such a shoulder.
+
 # ### 6.3 Does each nucleus hold the right amount of DNA?
 # 
-# This is a built-in control. A healthy nucleus holds one DNA set (G1) or two (G2), so total DNA shows two peaks, the second at twice the first. A piece of a nucleus falls below the first peak. Two merged nuclei fall above the second.
+# This is a built-in control. A healthy nucleus holds one DNA set (G1) or two (G2). So the total DNA shows two peaks, the second at twice the first. A piece of a nucleus falls below the first peak. Two merged nuclei fall above the second peak.
 # 
 # **Pass if:** there are two clear peaks, and under 10% of nuclei hold less than 70% of the first peak.
 
@@ -546,14 +560,20 @@ low_dna
 # **Result: PASS for cut nuclei, but CL1 has merged nuclei.**
 # 
 # - Few nuclei hold too little DNA: 0.2–0.4% in CL1 and 2.0–3.1% in CL2. Both lines show clear G1 and G2 peaks.
-# - **CL1 has extra peaks at 3 and 4 DNA sets.** No single nucleus holds 3 sets, but a G1 and a G2 nucleus in one outline do. Notebook 02 counts these objects: 13.7–27.5% of CL1 and 4.5–6.4% of CL2 objects hold more than 2.8 times the first peak.
+# - **CL1 has extra peaks at 3 and 4 DNA sets.** No single nucleus holds 3 sets, but a G1 and a G2 nucleus in one outline do.
+# - Notebook 02 counts these objects: 13.7–27.5% of CL1 objects and 4.5–6.4% of CL2 objects hold more than 2.8 times the first peak.
 # - This check has no limit for high DNA, so the scorecard does not show this problem.
-# 
+
 # ### 6.4 Are nuclei cut or lost?
 # 
-# We look at the masks of 72 control images. Two touching nuclei usually form a shape with a dent, while one nucleus cut in two forms a smooth shape. We also look for DNA signal with no nucleus on it (a lost nucleus).
+# We look at the masks of 72 control images.
 # 
-# **Pass if:** under 2% of objects are pieces of a cut nucleus, and under 2% of the DNA signal has no nucleus. **Control:** if the pieces are real, joining them must remove the low-DNA objects.
+# - Two touching nuclei usually form a shape with a dent. One nucleus cut in two forms a smooth shape.
+# - A lost nucleus shows as DNA signal with no nucleus object on it.
+# 
+# **Pass if:** under 2% of objects are pieces of a cut nucleus, and under 2% of the DNA signal has no nucleus.
+# 
+# **Control:** if the pieces are real, joining them must remove the low-DNA objects.
 
 # In[14]:
 
@@ -735,18 +755,18 @@ pl.DataFrame(repair_rows)
 # 
 # - 1.9–4.3% of objects form a smooth shape with a neighbor.
 # - Joining them does not change the share of low-DNA objects (CL1: 1.3% → 1.3%, CL2: 4.5% → 4.1%).
-# - The joined shapes are larger than one nucleus (median 73–95 pixels). So most are real nuclei that touch closely, not pieces.
+# - The joined shapes are larger than one nucleus (median 73–95 pixels). So most of them are real nuclei that touch closely, not pieces.
 # - 0.3–2.4% of the DNA signal has no nucleus.
-# 
+
 # ### 6.5 Do cell outlines follow the cell edge?
 # 
 # About two thirds of the features come from the cell and cytoplasm outlines.
 # 
 # **Pass if:**
 # 
-# - the median outline smoothness (solidity) is at least 0.85,
-# - at least 90% of the AGP stain lies inside cells,
-# - under 2% of cells have almost no cytoplasm, and
+# - The median outline smoothness (solidity) is at least 0.85.
+# - At least 90% of the AGP stain lies inside cells.
+# - Under 2% of cells have almost no cytoplasm.
 # - DNA is at least 3 times brighter in the nucleus than in the cytoplasm.
 
 # In[18]:
@@ -812,10 +832,10 @@ compartment_ratio
 # 
 # - Solidity is 0.88–0.89 in CL1 and 0.83–0.88 in CL2 (below 0.85 at 1h and 4h).
 # - 80–91% of the AGP stain lies inside cells. CL2 at 1h is lowest.
-# - Under 1% of cells have almost no cytoplasm, and DNA is 9.7–11.7 times brighter in the nucleus.
+# - Under 1% of cells have almost no cytoplasm. DNA is 9.7–11.7 times brighter in the nucleus than in the cytoplasm.
 # - 151 objects are giant (over 100,000 pixels). They are rare, but clearly wrong.
 # - The filter for cells on the image border removes 11–17% of cells, most in CL2, which has the largest cells.
-# 
+
 # ## 7. Are the features usable?
 # 
 # **Pass if:** few values are missing, and no feature is constant.
@@ -841,11 +861,11 @@ print(f"Constant features: {len(constant)}", constant[:6])
 feature_nulls.sort("n_null", descending=True).head(5)
 
 
-# **Result: PASS.** All 3,041 features have at most 0.1% missing values, and none is constant. The preprocessing module (`2.preprocessing`) selects the features used downstream.
-# 
+# **Result: PASS.** All 3,041 features have at most 0.1% missing values, and none is constant. The preprocessing module (`2.preprocessing`) selects the features for the later notebooks.
+
 # ## 8. Scorecard
 # 
-# The worst result of each check across plates and cell lines.
+# The table shows the worst result of each check across plates and cell lines.
 
 # In[22]:
 
@@ -876,3 +896,14 @@ worst = worst.with_columns(pl.col("check").replace_strict(order, return_dtype=pl
 results_table.write_csv(results_dir / "quality-scorecard.csv")
 worst
 
+
+# **Result: no check fails, so we keep these CellProfiler profiles.**
+# 
+# - 5 checks pass in every group: missing sites, even lighting, nucleus size, nuclei with too little DNA, and cells without cytoplasm.
+# - 4 checks give WARN in some groups:
+#   - pieces of a cut nucleus (WARN in 5 of 6 groups, worst 4.3%). Section 6.4 shows that most of these are touching nuclei, not pieces.
+#   - DNA signal without a nucleus (1 group, 2.4%).
+#   - AGP signal inside cell outlines (4 groups, worst 79.9% in CL2 at 1h).
+#   - median cell solidity (2 groups, worst 0.83 in CL2 at 1h).
+# - The rerun rule needs a FAIL in at least half of the groups. No check fails, so the rule does not ask for a new CellProfiler run.
+# - The merged CL1 nuclei (section 6.3) are not in the scorecard. Notebook 02 flags these cells.

@@ -8,22 +8,24 @@
 # **Answer: 73–89% of cells pass both checks, depending on plate and cell line.**
 # 
 # - **Image QC:** 193 of 10,257 images are blurred or over-exposed. They hold 1.5% of all cells. Most are over-exposed Mito images of CL1 at 24h.
-# - **Profile QC:** 19.7–23.4% of CL1 cells and 10.6–11.6% of CL2 cells have a bad outline, mostly two or more nuclei merged into one cell.
+# - **Profile QC:** 19.7–23.4% of CL1 cells and 10.6–11.6% of CL2 cells have a bad outline. Most of these hold two or more nuclei merged into one cell.
 # 
-# This notebook checks the data at two levels, and adds one pass/fail column for each:
+# This notebook checks the data at two levels, and adds one pass/fail column for each level:
 # 
 # | Level | What can go wrong | Column |
 # |---|---|---|
 # | **Image** | The image is blurred, or over-exposed (pixels at the camera's maximum) | `Metadata_image_qc` |
 # | **Profile** (single cell) | CellProfiler drew a wrong outline, for example two nuclei in one cell | `Metadata_profile_qc` |
 # 
-# At the end, it joins the 3 plates into one table, the **QC profile**, with all features and both QC columns. No cell is deleted: keep the cells where both columns are `pass`.
+# At the end, the notebook joins the 3 plates into one table, the **QC profile**, with all features and both QC columns. It removes no cell from the table. Keep the cells where both columns are `pass`.
+# 
+# The notebook has three parts: A. image QC (sections 2–4), B. profile QC (sections 5–12), C. the QC profile (section 13).
 # 
 # | Term | Meaning |
 # |---|---|
-# | Site, image | One field of view in a well (9 per well), imaged in 5 channels. In this notebook an "image" means this set of 5 channel images; each plate has 3,420 of them (17,100 image files). |
+# | Site, image | One field of view in a well (9 per well), imaged in 5 channels. In this notebook, an "image" means this set of 5 channel images. Each plate has 3,420 of them (17,100 image files). |
 # | Object | One nucleus, with its cell, as CellProfiler found it. Ideally, one object is one cell. |
-# | MAD | Median absolute deviation: a measure of spread that is not moved by a few extreme values. |
+# | MAD | Median absolute deviation: a measure of spread that a few extreme values do not move. |
 # | z-score | How far a value lies from the group average, in standard deviations. |
 # | G1, G2 | Cells with one set of DNA (G1), and cells that copied their DNA, with two sets (G2). |
 # | CL1, CL2 | The two cell lines, in columns 1–12 and 13–24. |
@@ -239,8 +241,8 @@ print(f"{cells.height:,} cells, no missing values in the 4 measurements")
 in_time_order(cells.group_by("plate", "cell_line").agg(pl.len().alias("cells"), pl.col("Metadata_Well").n_unique().alias("wells")))
 
 
-# **Result: PASS.** 2,647,721 cells, none with missing values, and 190 wells per plate and cell line.
-# 
+# **Result: PASS.** The data hold 2,647,721 cells, none with missing values, and 190 wells per plate and cell line.
+
 # # Part A: image QC
 # 
 # ## 2. Are the images sharp?
@@ -300,8 +302,12 @@ in_time_order(
 )
 
 
-# **Result: 65 of 10,257 images are blurred (0–1.6% per plate and cell line).** Most are in CL2 at 24h (28) and CL1 at 1h (17), and most of them in the DNA, RNA or AGP channel. Focus is otherwise similar across plates. The examples in section 4 show that the focus measure also catches images with a large out-of-focus object or debris, and that a few flagged images look sharp at this zoom.
+# **Result: 65 of 10,257 images are blurred (0–1.6% per plate and cell line).**
 # 
+# - Most blurred images are in CL2 at 24h (28) and CL1 at 1h (17), and most of them are in the DNA, RNA or AGP channel.
+# - Apart from these images, the focus is similar across plates.
+# - The examples in section 4 show that the focus measure also catches images with a large out-of-focus object or debris. A few flagged images look sharp at this zoom.
+
 # ## 3. Are the images over-exposed?
 # 
 # A pixel at the camera's maximum cannot get any brighter, so real differences in brightness are lost. We call a channel **over-exposed** if more than 1% of its pixels are at the maximum.
@@ -327,13 +333,16 @@ in_time_order(
 )
 
 
-# **Result: 145 images are over-exposed.** 108 of them are Mito images of CL1 at 24h (6.3% of those images), where dense clumps of cells are very bright. All other groups have at most 17. Over-exposure in one channel mostly affects that channel's brightness features, and `Metadata_image_qc_reason` names the channel, so a later analysis can choose to keep these images.
+# **Result: 145 images are over-exposed.**
 # 
+# - 108 of them are Mito images of CL1 at 24h (6.3% of those images), where dense clumps of cells are very bright. All other groups have at most 17.
+# - Over-exposure in one channel mostly affects the brightness features of that channel. `Metadata_image_qc_reason` names the channel, so a later analysis can choose to keep these images.
+
 # ## 4. Image QC result
 # 
-# An image **fails** if any channel is blurred or over-exposed. All cells in that image then get `fail` in `Metadata_image_qc`, and `Metadata_image_qc_reason` says why.
+# An image **fails** if any channel is blurred or over-exposed. All cells in that image then get `fail` in `Metadata_image_qc`, and `Metadata_image_qc_reason` gives the reason.
 # 
-# The examples show the middle of each image. Red marks pixels at the camera's maximum.
+# The examples show the middle of each image. Red marks pixels at the camera's maximum. The two tables after the examples count the failed images and cells.
 
 # In[6]:
 
@@ -440,7 +449,7 @@ sites.filter(pl.col("image_qc") == "fail").group_by(failure_type.alias("failed i
 # - CL1 at 24h loses the most: 5.4% of its cells, nearly all because of over-exposed Mito images. All other groups lose 0.4–1.4%.
 # - **Blurred examples:** a large out-of-focus object, softly blurred nuclei, and a bright streak of debris across the image. One example looks sharp at this zoom, so the blur check also removes a few good images.
 # - **Over-exposed examples:** bright clumps of cells with large saturated areas in the Mito channel, and the debris streak in the DNA channel.
-# 
+
 # # Part B: profile QC
 # 
 # ## 5. Run coSMicQC
@@ -453,9 +462,11 @@ sites.filter(pl.col("image_qc") == "fail").group_by(failure_type.alias("failed i
 # | 2. Poorly segmented nuclei | Debris, or a nucleus cut in pieces | Rough nucleus outline (solidity z < -1.6) |
 # | 3. Under-segmented cells | One cell outline that holds other nuclei | High DNA in the whole cell (z > 0.5) |
 # 
-# We compute z-scores per plate and cell line, because the two lines have different normal shapes (section 11 compares this with the whole plate). Panel A of Figure 2 prints 1.15 and -1.16, but the paper text and the authors' code use 1.5 and -1.6, so we use those.
+# - We compute the z-scores per plate and cell line, because the two lines have different normal shapes. Section 11 compares this choice with z-scores over the whole plate.
+# - Panel A of Figure 2 prints 1.15 and -1.16. The paper text and the authors' code use 1.5 and -1.6, so we use those.
+# - coSMicQC checks the outlines of all cells, including the cells in failed images.
 # 
-# coSMicQC checks the outlines of all cells, including those in failed images.
+# The code below marks each cell with one True/False column per condition. Sections 6–11 test whether these marks are right, before section 12 sets the final rule.
 
 # In[9]:
 
@@ -480,7 +491,7 @@ print(cells.select(*condition_names, "failed_qc").mean().with_columns(pl.all() *
 
 # ## 6. How many cells fail?
 # 
-# In the paper, 4–38% of cells failed. We also expect more failures in crowded wells.
+# In the coSMicQC paper, 4–38% of cells failed. We also expect more failures in crowded wells.
 
 # In[10]:
 
@@ -516,11 +527,11 @@ rates
 overlap
 
 
-# **Result: in the expected range.** 19.7–25.3% of cells fail. Condition 3 flags the most (15.6–19.7%), condition 1 flags 4.1–7.0%, and condition 2 flags 8.0–8.9%. Crowded wells do not fail more.
-# 
+# **Result: in the expected range.** 19.7–25.3% of cells fail. Condition 3 flags the most cells (15.6–19.7%). Condition 1 flags 4.1–7.0%, and condition 2 flags 8.0–8.9%. Crowded wells do not fail more.
+
 # ## 7. Where do the DNA limits sit?
 # 
-# Conditions 1 and 3 flag high DNA. A healthy G2 cell has twice the DNA of a G1 cell, so a limit below 2 times the G1 peak flags healthy cells.
+# Conditions 1 and 3 flag high DNA. A healthy G2 cell has twice the DNA of a G1 cell. So a limit below 2 times the G1 peak flags healthy cells.
 # 
 # **Pass if:** the condition 1 limit lies above 2 times the G1 peak.
 
@@ -578,9 +589,9 @@ peaks.select("plate", "cell_line", pl.col("^.*vs_first_peak$").round(2))
 # **Result: PASS for condition 1, but not for condition 3 in CL2.**
 # 
 # - The condition 1 limit lies at 2.5–2.7 times the G1 peak in CL2, and at 3.7–5.2 times in CL1.
-# - The condition 3 limit lies at 1.88–1.95 times in CL2, just below the G2 peak. In CL1 it lies at 2.3–3.3 times.
+# - The condition 3 limit lies at 1.88–1.95 times the G1 peak in CL2, just below the G2 peak. In CL1, it lies at 2.3–3.3 times.
 # - The CL1 limits are high because merged nuclei raise the CL1 average.
-# 
+
 # ## 8. Which DNA groups fail?
 # 
 # A good rule flags the objects outside the two peaks, and keeps the peaks.
@@ -658,14 +669,15 @@ too_much
 
 # **Result: PASS for CL1, FAIL for CL2 G2 cells.**
 # 
-# - Too much DNA: 13.7–27.5% of CL1 and 4.5–6.4% of CL2 objects. 73.5–100% of them fail.
+# - Too much DNA: 13.7–27.5% of CL1 objects and 4.5–6.4% of CL2 objects. 73.5–100% of them fail.
 # - First peak: 1.9–9.2% fail, as hoped.
 # - Second peak: 5.7–9.9% fail in CL1, but 45.8–54.0% fail in CL2.
-# - **Condition 3 causes the CL2 G2 failures** (43–52% of CL2 G2 cells, only 0.6–2.2% in CL1). But it also finds most merged nuclei in CL1 (68–100%; condition 1 finds 26–42%).
-# 
+# - **Condition 3 causes the CL2 G2 failures.** It fails 43–52% of CL2 G2 cells, and only 0.6–2.2% in CL1.
+# - But condition 3 also finds most merged nuclei in CL1 (68–100%). Condition 1 finds only 26–42% of them.
+
 # ## 9. Do flagged cells look wrong?
 # 
-# Eight random control cells per group. Yellow = nucleus outline, magenta = cell outline.
+# The figure shows eight random control cells per group. Yellow = nucleus outline, magenta = cell outline.
 
 # In[17]:
 
@@ -727,16 +739,18 @@ show_examples(
 )
 
 
-# **Result: conditions 1 and 2 look right; condition 3 does not.**
+# **Result: conditions 1 and 2 look right. Condition 3 does not.**
 # 
 # - **Condition 1, too much DNA:** clumps of 2–4 nuclei in one outline. Correct.
 # - **Condition 2 only:** mostly two touching nuclei in one outline. Correct.
 # - **Condition 3 only:** mostly single normal nuclei, so false alarms. The sample mixes both lines, and condition 3 works well in CL1 (section 8).
 # - The row for condition 1 with G2 DNA is empty, because the condition 1 limit lies above the G2 peak.
-# 
+
 # ## 10. Do the DNA peaks survive QC?
 # 
-# **Pass if:** removing the failed cells removes the objects outside the peaks, and keeps both peaks. The DNA curves are in section 12, next to the final rule.
+# **Pass if:** removing the failed cells removes the objects outside the peaks, and keeps both peaks.
+# 
+# The table counts the objects with too little DNA and the objects in the second peak, before and after QC with all 3 conditions. Section 12 draws the DNA curves, next to the final rule.
 
 # In[18]:
 
@@ -749,8 +763,11 @@ in_time_order(cells.group_by("cell_line", "plate").agg(
 ))
 
 
-# **Result: PASS for CL1, FAIL for CL2.** In CL1, the extra peaks at 3 and 4 DNA sets disappear, and the G1 and G2 peaks stay. In CL2, the upper half of the G2 peak disappears (from 23–28% to 14–21% of objects), which would bias any cell-cycle result.
+# **Result: PASS for CL1, FAIL for CL2.**
 # 
+# - In CL1, the extra peaks at 3 and 4 DNA sets disappear, and the G1 and G2 peaks stay.
+# - In CL2, the upper half of the G2 peak disappears (from 23–28% to 14–21% of objects). This would bias any cell-cycle result.
+
 # ## 11. Do our choices change the result?
 # 
 # We repeat the analysis with the panel A limits (1.15 and -1.16), and with z-scores over the whole plate.
@@ -776,15 +793,28 @@ for version, table in versions.items():
 pl.concat(rows).select("version", pl.exclude("version")).sort("cell_line", "version")
 
 
-# **Result: no.** With all three choices, half or more of the CL2 G2 cells fail (51–64%), and under 12% of the CL1 G2 cells fail.
-# 
+# **Result: no.** With all three choices, half or more of the CL2 G2 cells fail (51–64%). Under 12% of the CL1 G2 cells fail.
+
 # ## 12. The profile QC rule
 # 
-# Sections 8–10 lead to one rule per cell line: **CL1 uses all 3 conditions; CL2 uses conditions 1 and 2**, because condition 3 flags healthy G2 cells in CL2. A cell **fails** if it fails a condition of its cell line's rule. It gets `fail` in `Metadata_profile_qc`, and `Metadata_profile_qc_reason` says why.
+# Sections 8–10 lead to one rule per cell line:
+# 
+# - **CL1 uses all 3 conditions.**
+# - **CL2 uses conditions 1 and 2**, because condition 3 flags healthy G2 cells in CL2.
+# 
+# A cell **fails** if it fails a condition of the rule of its cell line. It then gets `fail` in `Metadata_profile_qc`, and `Metadata_profile_qc_reason` gives the reason.
 # 
 # **Pass if:** the rule removes most objects with too much DNA, keeps the G2 peak in both cell lines, and fails treated cells at a rate close to DMSO.
 # 
-# **Reading the DNA plot:** grey = all objects; dashed red = objects that pass all 3 conditions (section 10); solid = objects that pass the rule of the cell line (in CL1 the rule uses all 3 conditions, so the two lines are the same). G1 and G2 mark one and two DNA sets. 3× is most likely a G1 and a G2 nucleus merged into one outline; 4× is two G2 nuclei merged, or one polyploid nucleus. Objects below 0.7 times G1 are pieces of nuclei or debris.
+# **Reading the DNA plot:**
+# 
+# - Grey: all objects.
+# - Dashed red: the objects that pass all 3 conditions (section 10).
+# - Solid: the objects that pass the rule of the cell line. In CL1, the rule uses all 3 conditions, so the two lines are the same.
+# - G1 and G2 mark one and two DNA sets. 3× is most likely a G1 and a G2 nucleus merged into one outline. 4× is two G2 nuclei merged, or one polyploid nucleus.
+# - Objects below 0.7 times G1 are pieces of nuclei or debris.
+# 
+# After the DNA plot, a table compares the failure rate of each treatment with DMSO, and a figure shows example cells.
 
 # In[20]:
 
@@ -875,11 +905,12 @@ show_examples({
 # **Result: PASS, with one treatment to check.**
 # 
 # - Profile QC fails 19.7–23.4% of CL1 cells and 10.6–11.6% of CL2 cells.
-# - **Merged nuclei fail:** 73.5–100% of CL1 and 77.9–86.7% of CL2 objects with too much DNA. At 24h, some CL1 objects at 3 DNA sets still pass.
-# - **The G2 peak stays in both lines:** the rule fails 5.4–12.2% of CL2 G2 cells, against 45.8–54.0% with all 3 conditions (the dashed red line loses the upper half of the CL2 G2 peak).
-# - **Example cells:** most failed cells hold two or more nuclei in one outline, or a nucleus with a ragged outline. Passed cells mostly have one nucleus with a clean outline. In CL1, a few failed cells look like single large nuclei (most likely two nuclei on top of each other, or a polyploid cell).
-# - Treated cells fail at a rate close to DMSO (median difference 0.6 points). The exception is **CBK600005 at 24h in CL2** (25.9% against 10.9%); check these wells before filtering.
-# 
+# - **Merged nuclei fail:** 73.5–100% of CL1 objects and 77.9–86.7% of CL2 objects with too much DNA. At 24h, some CL1 objects at 3 DNA sets still pass.
+# - **The G2 peak stays in both lines.** The rule fails 5.4–12.2% of CL2 G2 cells, against 45.8–54.0% with all 3 conditions. The dashed red line loses the upper half of the CL2 G2 peak.
+# - **Example cells:** most failed cells hold two or more nuclei in one outline, or a nucleus with a ragged outline. Passed cells mostly have one nucleus with a clean outline.
+# - In CL1, a few failed cells look like single large nuclei. These are most likely two nuclei on top of each other, or a polyploid cell.
+# - Treated cells fail at a rate close to DMSO (median difference 0.6 points). The exception is **CBK600005 at 24h in CL2** (25.9% against 10.9%). Check these wells before filtering.
+
 # # Part C: the QC profile
 # 
 # ## 13. Save the QC profile
@@ -890,8 +921,8 @@ show_examples({
 # |---|---|
 # | `Metadata_cell_line`, `Metadata_time_point` | CL1 or CL2, and 1h, 4h or 24h |
 # | `Metadata_treatment`, `Metadata_well_type` | The compound or ligand (DMSO for controls), and compound, ligand or control |
-# | `Metadata_image_qc`, `Metadata_image_qc_reason` | `pass` or `fail`, and why (Part A) |
-# | `Metadata_profile_qc`, `Metadata_profile_qc_reason` | `pass` or `fail`, and why (Part B) |
+# | `Metadata_image_qc`, `Metadata_image_qc_reason` | `pass` or `fail`, and the reason (Part A) |
+# | `Metadata_profile_qc`, `Metadata_profile_qc_reason` | `pass` or `fail`, and the reason (Part B) |
 # 
 # **Pass if:** the QC profile has one row per cell of the 3 plates, and every cell has both QC results.
 
@@ -965,13 +996,19 @@ print(f"{qc_profile_path.name}: {qc_summary['len'].sum():,} cells, {len(schema):
 )
 
 
-# **Result: PASS.** The QC profile holds all 2,647,721 cells and 4,062 columns (53.8 GiB): the 4,054 columns of the profiles plus 8 new columns. Every cell has both QC results. 73.1–88.9% of cells pass both checks.
+# **Result: PASS.**
 # 
+# - The QC profile holds all 2,647,721 cells and 4,062 columns (53.8 GiB): the 4,054 columns of the profiles plus 8 new columns.
+# - Every cell has both QC results. 73.1–88.9% of cells pass both checks.
+
 # ## Summary
 # 
 # - **Data:** 2,647,721 single cells from 3 plates (1h, 4h and 24h) and 2 cell lines.
-# - **Image QC:** an image fails if a channel is blurred (focus more than 5 MADs below its plate and cell line) or over-exposed (over 1% of pixels at the camera's maximum). 193 images fail, holding 1.5% of cells.
-# - **Profile QC:** a cell fails if coSMicQC finds a bad outline, with all 3 conditions in CL1 and conditions 1 and 2 in CL2. 10.6–23.4% of cells fail, mostly merged nuclei.
+# - **Image QC:** an image fails if a channel is blurred (focus more than 5 MADs below its plate and cell line) or over-exposed (over 1% of pixels at the camera's maximum). 193 images fail, and they hold 1.5% of cells.
+# - **Profile QC:** a cell fails if coSMicQC finds a bad outline. CL1 uses all 3 conditions, and CL2 uses conditions 1 and 2. 10.6–23.4% of cells fail, mostly merged nuclei.
 # - **Output:** `results/qc_Panc1_hPSC_sc-profiles.parquet`, one table for all plates. Keep the cells where `Metadata_image_qc` and `Metadata_profile_qc` are both `pass` (73.1–88.9% of cells), then preprocess.
-# - **Caveats:** the blur check removes a few sharp images; the profile rule removes some single nuclei with a lot of DNA (stacked nuclei or polyploid cells); and the rule per cell line is our choice, not part of the coSMicQC paper.
+# - **Caveats:**
+#   - The blur check removes a few sharp images.
+#   - The profile rule removes some single nuclei with a lot of DNA (stacked nuclei or polyploid cells).
+#   - The rule per cell line is our choice, not part of the coSMicQC paper.
 # - **Still open:** check the CBK600005 wells at 24h in CL2, where many cells fail profile QC.

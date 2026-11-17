@@ -3,14 +3,16 @@
 
 # # Convert single-cell CellProfiler profiles to parquet
 # 
-# `headless-cp-wf` already joins the Image, Cells, Cytoplasm and Nuclei tables into one row per cell,
-# so CytoTable is not needed here. This notebook only changes the file format:
-# one gzip CSV per plate -> one parquet file per plate.
+# **Goal:** store the single-cell CellProfiler tables in a format that the later notebooks can read fast and completely, without changing any value.
 # 
-# Memory: DuckDB streams each CSV straight into parquet (`COPY ... TO`), so the table is never held in RAM.
-# Memory use is set by `memory_limit` and `row_group_size`, not by the file size.
+# `headless-cp-wf` already joins the Image, Cells, Cytoplasm and Nuclei tables into one row per cell. So this notebook does not need CytoTable. It only changes the file format: one gzip CSV per plate becomes one parquet file per plate.
 # 
-# Missing values: every missing-value token (`nan`, `inf`, empty) becomes a parquet NULL.
+# - **Memory:** DuckDB streams each CSV straight into parquet (`COPY ... TO`), so the table never sits in memory. `memory_limit` and `row_group_size` set the memory use, not the file size.
+# - **Missing values:** every missing-value token (`nan`, `inf`, empty) becomes a parquet NULL.
+# 
+# Sections: settings, find the plate tables, column types, convert, validate.
+# 
+# **Summary of the result:** 3 parquet files (1h, 4h, 24h) with 2,647,721 cells and 4,054 columns. Each file matches the cell count of the CellProfiler run and the column order of its CSV.
 
 # In[1]:
 
@@ -27,8 +29,7 @@ import polars as pl
 
 # ## Settings
 # 
-# Match `memory_limit` and `n_threads` to the Berzelius allocation.
-# Reading a gzip file is single-threaded, so more threads mostly help the parquet writer.
+# Match `memory_limit` and `n_threads` to the Berzelius allocation. Reading a gzip file uses one thread, so more threads mostly help the parquet writer.
 
 # In[2]:
 
@@ -59,8 +60,10 @@ overwrite = False
 
 # ## Find the plate tables
 # 
-# Each plate's `DONE` file holds the path of its workflow run. The run has the per-cell table
-# (`cp_features/all_plates.csv.gz`) and the MERGE report with the expected number of cells.
+# The `DONE` file of each plate holds the path of its workflow run. The run has two files that we use:
+# 
+# - the per-cell table (`cp_features/all_plates.csv.gz`).
+# - the MERGE report, with the expected number of cells.
 
 # In[3]:
 
@@ -83,14 +86,16 @@ for plate, paths in plates.items():
 
 # ## Column types
 # 
-# Types are set explicitly instead of inferred. Type inference only reads a sample of rows, and
-# with ~4000 columns a column that is empty in the sample can be typed wrong.
-# Explicit types also make the read fail loudly on any value that is not a number or a null token,
-# so no unexpected `NaN` can reach the parquet file.
+# We set the column types explicitly instead of letting DuckDB guess them.
 # 
-# - text: file names, paths, URLs, MD5 digests, and metadata labels (`Metadata_Column` is `"01"`, so it stays text)
-# - integer: image and object indices, site and tile position
-# - double: every measurement
+# - Type inference reads only a sample of rows. With ~4,000 columns, a column that is empty in the sample can get the wrong type.
+# - Explicit types also make the read fail loudly on any value that is not a number or a null token. So no unexpected `NaN` can reach the parquet file.
+# 
+# The three types:
+# 
+# - **text:** file names, paths, URLs, MD5 digests, and metadata labels (`Metadata_Column` is `"01"`, so it stays text).
+# - **integer:** image and object indices, site and tile position.
+# - **double:** every measurement.
 
 # In[4]:
 
@@ -135,8 +140,7 @@ pl.Series(list(schema.values())).value_counts(sort=True)
 
 # ## Convert
 # 
-# One streaming pass per plate. The parquet file is first written as `.partial` and renamed when
-# complete, so an interrupted run never leaves a file that looks finished.
+# The notebook makes one streaming pass per plate. It first writes the parquet file as `.partial`, and renames the file when it is complete. So an interrupted run never leaves a file that looks finished. A plate whose parquet file already exists is skipped (set `overwrite` to convert it again).
 
 # In[5]:
 
@@ -193,11 +197,13 @@ shutil.rmtree(tmp_dir, ignore_errors=True)
 
 # ## Validate
 # 
-# - row count equals the number of cells in the MERGE report
-# - the column names and order match the CSV header
-# - no `NaN` or infinite value is left in any measurement column (full scan of the parquet file)
+# The notebook checks three things per plate, and stops with an error if one fails:
 # 
-# The null counts per column come from the parquet metadata (no scan) and are saved next to each file.
+# 1. The row count equals the number of cells in the MERGE report.
+# 2. The column names and their order match the CSV header.
+# 3. No `NaN` or infinite value is left in any measurement column (full scan of the parquet file).
+# 
+# The null counts per column come from the parquet metadata (no scan). The notebook saves them next to each file (`*_missing-values.csv`).
 
 # In[7]:
 
@@ -261,3 +267,10 @@ with duckdb.connect() as con:
 
 pl.DataFrame(summary)
 
+
+# **Result: PASS.** All checks pass on the 3 plates.
+# 
+# - The 3 parquet files hold 786,232 (1h), 857,623 (4h) and 1,003,866 (24h) cells, 2,647,721 in total, with 4,054 columns each.
+# - About 1,085 columns per plate have some missing values. The largest count in one column is 2,312 cells (1h), under 0.3% of the cells of that plate.
+# - The parquet files take 16.1–20.3 GiB, against 26.7–33.8 GiB for the gzip CSV files.
+# - In this run, the 3 parquet files already existed, so the notebook skipped the conversion and only ran the validation.

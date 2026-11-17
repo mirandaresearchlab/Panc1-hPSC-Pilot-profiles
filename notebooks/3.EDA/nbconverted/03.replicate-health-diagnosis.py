@@ -3,17 +3,22 @@
 
 # # Replicate health and compound activity
 # 
-# **Question:** do the compounds and doses capture real biology? We ask four things: do the replicate wells of a treatment agree with each other, which treatments change the cells compared with DMSO, how the change depends on dose and time, and which treatments look alike.
+# **Question:** do the compounds and doses capture real biology? We ask four questions:
+# 
+# 1. Do the replicate wells of a treatment agree with each other?
+# 2. Which treatments change the cells, compared with DMSO?
+# 3. How does the change depend on dose and time?
+# 4. Which treatments look alike?
 # 
 # Words used in this notebook:
 # 
 # - **Replicate wells:** the 3 wells of the same treatment and dose, on the same plate and cell line.
-# - **Null distribution:** the scores we get from wells that are *not* replicates. A real result must beat the null.
+# - **Null distribution:** the scores of wells that are *not* replicates. A real result must beat the null.
 # - **Replicate correlation and percent replicating:** how similar the 3 replicate profiles are (Pearson correlation across all features), compared with the null. Percent replicating is the share of treatments that beat the 95th percentile of the null.
-# - **mAP (mean average precision):** for each replicate well, we rank all other wells by similarity and ask whether its replicates come before the DMSO wells. mAP is 1 when the replicates always come first, and about 0.02 (3 replicates among 127 DMSO wells) by chance. A permutation test gives a p-value. A treatment with significant mAP is **active**: its wells are reproducibly different from DMSO.
+# - **mAP (mean average precision):** each replicate well ranks its replicates and the DMSO wells by similarity. mAP is 1 when the replicates always come first, and about 0.02 by chance (3 replicates among 127 DMSO wells). A permutation test gives a p-value. A treatment with a significant mAP is **active**: its wells are reproducibly different from DMSO.
 # - **Consensus profile:** the median of the 3 replicate profiles.
 # 
-# Every comparison is made within one plate (time point) and one cell line, against the DMSO wells of that same plate and cell line, because time and exposure settings cannot be separated, and cell line and plate side cannot be separated.
+# DMSO is the only reference. We compare every treatment with the DMSO wells of the same plate (time point) and cell line. The data cannot separate time from the exposure settings, or cell line from plate side, so comparisons never cross plates or cell lines.
 # 
 # ## Setup
 # 
@@ -127,9 +132,9 @@ def panel_filter(time, line):
 
 # ## 1. Load the well profiles
 # 
-# Each well profile is the median of its QC-passing cells. Features were normalized against the DMSO cells of the same plate and cell line, so 0 means "like DMSO".
+# Each well profile is the median of its QC-passing cells. The preprocessing normalized the features against the DMSO cells of the same plate and cell line, so 0 means "like DMSO".
 # 
-# The preprocessing also marks each well as passing or failing a well QC (`Metadata_well_qc`): a well fails when fewer than 100 of its cells pass cell QC, or when more than 10% of its values are missing. We leave failed wells out of every analysis below.
+# The preprocessing also marks each well as passing or failing well QC (`Metadata_well_qc`). A well fails when fewer than 100 of its cells pass cell QC, or when more than 10% of its values are missing. We leave failed wells out of every analysis below.
 # 
 # **Pass if:** few wells fail, and every treatment keeps at least 2 of its 3 wells per plate and cell line.
 
@@ -194,8 +199,11 @@ design
 
 # ### Clip and rescale the features
 # 
-# 1. **Clip.** Features with almost no spread in the DMSO cells can get huge normalized values. The preprocessing drops the worst of them, but we still set any value beyond ±20 to ±20, and report how often that happens.
-# 2. **Rescale to the DMSO wells.** The features were scaled by the spread between DMSO *cells*. The spread between DMSO *wells* is much smaller and differs between features, so a few noisy features would dominate every distance. For each plate and cell line, we subtract the median DMSO well and divide by the spread of the DMSO wells (1.4826 × MAD). A value of 3 now means "3 times the normal well-to-well variation of DMSO". We clip again at ±20.
+# 1. **Clip.** Features with almost no spread in the DMSO cells can get huge normalized values. The preprocessing drops the worst of them. We still set any value beyond ±20 to ±20, and report how often that happens.
+# 2. **Rescale to the DMSO wells.** The preprocessing scaled the features by the spread between DMSO *cells*. The spread between DMSO *wells* is much smaller, and differs between features. Without a second scaling, a few noisy features would dominate every distance.
+#    - For each plate and cell line, we subtract the median DMSO well and divide by the spread of the DMSO wells (1.4826 × MAD).
+#    - A value of 3 then means "3 times the normal well-to-well variation of DMSO".
+#    - We clip again at ±20.
 # 
 # All correlations, distances and clusters below use these clipped, rescaled profiles.
 
@@ -225,19 +233,25 @@ profiles = np.clip(profiles, -clip_limit, clip_limit)
 meta = meta.with_columns(pl.Series("distance", np.linalg.norm(profiles, axis=1)))
 
 
-# **Result:**
+# **Result: PASS.**
 # 
-# - 1,140 wells × 1,399 features. 4 wells fail well QC, all on the 24h plate in CL1 with fewer than 100 cells: 2 DMSO wells (L04, N10), and one well each of CBK175924 0.67 mM (N03) and 2 mM (N08). We leave them out, so 1,136 wells remain, and these two CBK175924 treatments keep 2 wells.
-# - Only 48 input values (0.003%, in 14 features; largest 44) were beyond ±20 and were clipped.
-# - After rescaling to the DMSO well-to-well spread, 0.08% of the values were beyond ±20 and were clipped.
+# - The data hold 1,140 wells × 1,399 features.
+# - 4 wells fail well QC, all on the 24h plate in CL1 with fewer than 100 cells: 2 DMSO wells (L04, N10), and one well each of CBK175924 0.67 mM (N03) and 2 mM (N08). We leave them out, so 1,136 wells remain. These two CBK175924 treatments keep 2 wells.
+# - Only 48 input values (0.003%, in 14 features, largest 44) were beyond ±20, and we clipped them.
+# - After the rescaling, 0.08% of the values were beyond ±20, and we clipped them.
 
-# ## 2. Replicate reproducibility
+# ## 2. Do the replicate wells agree, and which treatments differ from DMSO?
 # 
-# **Percent replicating.** For each treatment, plate and cell line, the replicate correlation is the median of the 3 pairwise correlations between its 3 wells (or the single correlation, when well QC left only 2 wells; it is then compared with a null of 2 wells). The null draws 3 wells from 3 *different* treatments on the same plate and cell line (DMSO counts as one treatment), 10,000 times. A treatment "replicates" when its replicate correlation is above the 95th percentile of the null.
+# We use two standard readouts. Section 2a asks whether the 3 replicate wells of a treatment agree with each other. Section 2b asks whether they also differ from DMSO. Section 2c puts the two readouts side by side, with the DMSO-only checks.
 # 
-# **Negative control check:** sets of 3 random DMSO wells should beat the threshold only about 5% of the time.
+# ### 2a. Percent replicating
 # 
-# **How to read the figure:** each panel has the null on top (grey) and, below it, one row per agent with one dot per dose (light and small = low dose, dark and large = high dose). A dot right of the dashed line, with a black outline, is a treatment whose wells agree more than chance.
+# 1. **Replicate correlation:** for each treatment, plate and cell line, the median of the 3 pairwise Pearson correlations between its 3 wells. When well QC left only 2 wells, we use their single correlation, and compare it with a null of 2 wells.
+# 2. **Null:** 10,000 times, we draw 3 wells from 3 *different* treatments on the same plate and cell line (DMSO counts as one treatment).
+# 3. **Call:** a treatment "replicates" when its replicate correlation is above the 95th percentile of the null.
+# 4. **Negative control:** sets of 3 random DMSO wells should beat the threshold only about 5% of the time.
+# 
+# **How to read the figure:** each panel shows the null on top (grey). Below it, each row is one agent, with one dot per dose (light and small = low dose, dark and large = high dose). A dot right of the dashed line, with a black outline, is a treatment whose wells agree more than chance.
 # 
 # **Pass if:** DMSO sets pass about 5% of the time, and treatments pass more often than that.
 
@@ -305,123 +319,6 @@ for time, line in panels:
         f"DMSO sets pass {100 * (dmso_scores[(time, line)] > corr_thresholds[(time, line)]).mean():.1f}%"
     )
 print(f"all plates: {scores['replicating'].sum()}/{scores['replicating'].count()} ({100 * scores['replicating'].mean():.0f}%); not testable (1 well left): {scores['replicating'].null_count()}")
-
-
-# **mAP against DMSO.** We use `mantispy.tl.map` (activity mode, cosine distance) on the rescaled profiles. Each replicate well ranks the other wells of its plate and cell line; only its replicates and the DMSO wells are ranked. The p-values come from 100,000 permutations and are corrected for all tests together (Benjamini–Hochberg, q < 0.05). A treatment with a single well left after well QC cannot be scored.
-# 
-# **Negative control check:** we pretend that 20 random sets of 3 DMSO wells per plate and cell line are treatments and score them against the remaining DMSO wells. About 5% should have p < 0.05, and none should pass q < 0.05.
-
-# In[7]:
-
-
-# mAP needs an AnnData object: the rescaled profiles, and one label per perturbation x plate x cell line
-map_data = adata.copy()
-map_data.X = profiles.astype(np.float32)
-map_data.obs["Metadata_panel"] = (
-    map_data.obs["Metadata_time_point"].astype(str) + "_" + map_data.obs["Metadata_cell_line"].astype(str)
-).to_numpy()
-map_data.obs["Metadata_query"] = (map_data.obs["Metadata_Perturbation"].astype(str) + "|" + map_data.obs["Metadata_panel"]).to_numpy()
-mt.tl.map(map_data, mode="activity", label="Metadata_query", batch="Metadata_panel", null_size=100_000, seed=seed, n_jobs=n_threads)
-
-
-def read_map(result):
-    # split the "perturbation|time_cellline" label back into columns
-    return pl.from_pandas(result).select(
-        pl.col("Metadata_query").str.split("|").list.first().alias("perturbation"),
-        pl.col("Metadata_query").str.split("|").list.last().str.split("_").list.first().alias("time_point"),
-        pl.col("Metadata_query").str.split("|").list.last().str.split("_").list.last().alias("cell_line"),
-        pl.col("score").alias("mAP"),
-        pl.col("pvalue").alias("mAP_pvalue"),
-        pl.col("qvalue").alias("mAP_qvalue"),
-    )
-
-
-map_scores = read_map(map_data.uns["mantispy"]["map"]).with_columns(pl.col("time_point").cast(pl.Enum(plate_order)))
-scores = scores.join(map_scores, on=["time_point", "cell_line", "perturbation"], how="left").with_columns(
-    (pl.col("mAP_qvalue") < fdr).fill_null(False).alias("active")
-)
-print(f"active (mAP q < {fdr}): {scores['active'].sum()}/{scores.height}")
-
-# negative control: fake treatments made of random DMSO wells
-dmso_data = map_data[map_data.obs["Metadata_Control_Type"].astype(str) == "negcon"].copy()
-query = dmso_data.obs["Metadata_query"].astype(str).to_numpy().copy()
-panel_names = dmso_data.obs["Metadata_panel"].to_numpy()
-fake = np.zeros(dmso_data.n_obs, dtype=bool)
-for panel_name in np.unique(panel_names):
-    picked = rng.permutation(np.flatnonzero(panel_names == panel_name))[:60]
-    for k in range(20):
-        query[picked[3 * k : 3 * k + 3]] = f"fakeDMSO-{k}|{panel_name}"
-    fake[picked] = True
-dmso_data.obs["Metadata_query"] = query
-dmso_data.obs["Metadata_Control_Type"] = np.where(fake, "treatment", "negcon")
-mt.tl.map(dmso_data, mode="activity", label="Metadata_query", batch="Metadata_panel", null_size=100_000, seed=seed, n_jobs=n_threads)
-fake_scores = read_map(dmso_data.uns["mantispy"]["map"])
-print(
-    f"fake DMSO treatments: {(fake_scores['mAP_pvalue'] < 0.05).sum()}/{fake_scores.height} with p < 0.05 "
-    f"({100 * (fake_scores['mAP_pvalue'] < 0.05).mean():.1f}%), {(fake_scores['mAP_qvalue'] < fdr).sum()} with q < {fdr}; "
-    f"median mAP {fake_scores['mAP'].median():.3f}"
-)
-
-
-# In[8]:
-
-
-# figure: mAP against DMSO for every treatment and dose, per plate and cell line
-# grey band = chance level: the mAP range of the 20 fake treatments made of random DMSO wells (same panel)
-y_of = {p: i for i, p in enumerate(perturbation_order)}
-fig, axes = plt.subplots(2, 3, figsize=(7.2, 6.6), sharex=True, sharey=True, layout="constrained")
-for i, line in enumerate(line_order):
-    for j, time in enumerate(plate_order):
-        ax = axes[i, j]
-        sub = scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))
-        fake = fake_scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))["mAP"].to_numpy()
-        ax.axvspan(0, fake.max(), color="#e6e6e6", lw=0, zorder=0)
-        y = np.array([y_of[p] for p in sub["perturbation"]])
-        x = sub["mAP"].to_numpy()
-        colors = np.array([well_type_colors[w] for w in sub["well_type"]])
-        active = sub["active"].to_numpy()
-        # filled = active (q < 0.05), hollow = not active
-        ax.scatter(x[active], y[active], s=14, c=colors[active], linewidths=0, zorder=3)
-        ax.scatter(x[~active], y[~active], s=14, facecolors="white", edgecolors=colors[~active], linewidths=0.8, zorder=3)
-        ax.set_title(f"{line}, {time}  ({active.sum()} of {sub.height} active)")
-        ax.grid(axis="y", color="#f0f0f0", lw=0.5, zorder=0)
-        if i == 1:
-            ax.set_xlabel("mAP against DMSO")
-axes[0, 0].set_yticks(range(len(perturbation_order)), [pretty(p) for p in perturbation_order])
-axes[0, 0].invert_yaxis()
-axes[0, 0].set_xlim(-0.02, 1.02)
-for ax in axes.flat:
-    ax.tick_params(axis="y", labelsize=5.5)
-handles = [
-    Patch(color="#e6e6e6", label="chance: mAP of fake DMSO treatments"),
-    Line2D([], [], marker="o", ls="", color=well_type_colors["compound"], markersize=4, label="compound, active (q < 0.05)"),
-    Line2D([], [], marker="o", ls="", color=well_type_colors["ligand"], markersize=4, label="ligand, active (q < 0.05)"),
-    Line2D([], [], marker="o", ls="", markerfacecolor="white", markeredgecolor="black", markersize=4, label="not active"),
-]
-fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.05), ncols=4)
-fig.suptitle("Which treatments differ from DMSO? mAP of each treatment and dose")
-save_figure(fig, "02b_map-against-dmso")
-
-
-# In[9]:
-
-
-# one summary row per plate and cell line
-panel_summary = []
-for time, line in panels:
-    sub = scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))
-    fake_sub = fake_scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))
-    panel_summary.append({
-        "time_point": time, "cell_line": line, "treatments": sub.height, "treatments_with_3_wells": int((sub["n_wells"] == 3).sum()),
-        "corr_threshold": corr_thresholds[(time, line)],
-        "percent_replicating": 100 * sub["replicating"].mean(),
-        "dmso_sets_passing_corr_pct": 100 * (dmso_scores[(time, line)] > corr_thresholds[(time, line)]).mean(),
-        "percent_active_mAP": 100 * sub["active"].mean(),
-        "fake_dmso_p05_pct": 100 * (fake_sub["mAP_pvalue"] < 0.05).mean(),
-    })
-panel_summary = pl.DataFrame(panel_summary)
-panel_summary.write_csv(table_dir / "panel_summary.csv")
-panel_summary.with_columns(pl.selectors.float().round(1))
 
 
 # In[10]:
@@ -533,6 +430,151 @@ scores.filter(pl.col("replicating")).sort(
 )
 
 
+# **Result of 2a:**
+# 
+# - Percent replicating rises with time (see 2c for the numbers).
+# - **Doses:** CBK600005 replicates at all 3 doses on every plate. CBK041498, CBK175924 and CBK600008 replicate only at 2 mM. CBK200566 (CL2, 4h and 24h) and TGFβ1 (CL2, 24h) also replicate at lower doses. The table above lists the 3 wells of each replicating set (also in `replicating_doses.csv`).
+# - CBK175924 2 mM in CL1 at 24h lost a well to well QC. Its 2 remaining wells (r = 0.55) fall just below the stricter threshold for 2 wells (0.61).
+# - TGFβ1 10 ng/ml has the highest score in CL1 at 1h (r = 0.95). But its 3 wells (C02, E01, E06) lie in odd rows of columns 1–6, the shifted area of section 3a. So this score most likely comes from the plate effect, not from TGFβ1.
+
+# ### 2b. mAP against DMSO
+# 
+# We use `mantispy.tl.map` (activity mode, cosine distance) on the rescaled profiles.
+# 
+# 1. Each replicate well ranks the other wells of its plate and cell line. Only its replicates and the DMSO wells enter this ranking.
+# 2. 100,000 permutations give a p-value. We correct the p-values of all 126 tests together (Benjamini–Hochberg), and call a treatment **active** at q < 0.05.
+# 3. A treatment with only one well left after well QC cannot get a score.
+# 
+# **Negative control:** on each plate and cell line, we treat 20 random sets of 3 DMSO wells as fake treatments. We score them against the remaining DMSO wells. About 5% should reach p < 0.05, and none should pass q < 0.05.
+# 
+# **How to read the figure:** each row is one treatment and dose, and each panel is one cell line and plate. The x-axis is the mAP against DMSO. Filled dots are active (q < 0.05), open dots are not. The grey band runs from 0 to the highest mAP of the 20 fake DMSO treatments on that plate.
+# 
+# The grey band is a visual chance level, not the test. The q-values come from the permutation test. Each fake treatment is ranked against the ~67 DMSO wells that remain after we pick the 60 fake wells. A real treatment is ranked against all ~127 DMSO wells. With fewer reference wells, a high mAP comes more easily by chance, so the band sits a little higher than the true chance level of a real treatment.
+
+# In[7]:
+
+
+# mAP needs an AnnData object: the rescaled profiles, and one label per perturbation x plate x cell line
+map_data = adata.copy()
+map_data.X = profiles.astype(np.float32)
+map_data.obs["Metadata_panel"] = (
+    map_data.obs["Metadata_time_point"].astype(str) + "_" + map_data.obs["Metadata_cell_line"].astype(str)
+).to_numpy()
+map_data.obs["Metadata_query"] = (map_data.obs["Metadata_Perturbation"].astype(str) + "|" + map_data.obs["Metadata_panel"]).to_numpy()
+mt.tl.map(map_data, mode="activity", label="Metadata_query", batch="Metadata_panel", null_size=100_000, seed=seed, n_jobs=n_threads)
+
+
+def read_map(result):
+    # split the "perturbation|time_cellline" label back into columns
+    return pl.from_pandas(result).select(
+        pl.col("Metadata_query").str.split("|").list.first().alias("perturbation"),
+        pl.col("Metadata_query").str.split("|").list.last().str.split("_").list.first().alias("time_point"),
+        pl.col("Metadata_query").str.split("|").list.last().str.split("_").list.last().alias("cell_line"),
+        pl.col("score").alias("mAP"),
+        pl.col("pvalue").alias("mAP_pvalue"),
+        pl.col("qvalue").alias("mAP_qvalue"),
+    )
+
+
+map_scores = read_map(map_data.uns["mantispy"]["map"]).with_columns(pl.col("time_point").cast(pl.Enum(plate_order)))
+scores = scores.join(map_scores, on=["time_point", "cell_line", "perturbation"], how="left").with_columns(
+    (pl.col("mAP_qvalue") < fdr).fill_null(False).alias("active")
+)
+print(f"active (mAP q < {fdr}): {scores['active'].sum()}/{scores.height}")
+
+# negative control: fake treatments made of random DMSO wells
+dmso_data = map_data[map_data.obs["Metadata_Control_Type"].astype(str) == "negcon"].copy()
+query = dmso_data.obs["Metadata_query"].astype(str).to_numpy().copy()
+panel_names = dmso_data.obs["Metadata_panel"].to_numpy()
+fake = np.zeros(dmso_data.n_obs, dtype=bool)
+for panel_name in np.unique(panel_names):
+    picked = rng.permutation(np.flatnonzero(panel_names == panel_name))[:60]
+    for k in range(20):
+        query[picked[3 * k : 3 * k + 3]] = f"fakeDMSO-{k}|{panel_name}"
+    fake[picked] = True
+dmso_data.obs["Metadata_query"] = query
+dmso_data.obs["Metadata_Control_Type"] = np.where(fake, "treatment", "negcon")
+mt.tl.map(dmso_data, mode="activity", label="Metadata_query", batch="Metadata_panel", null_size=100_000, seed=seed, n_jobs=n_threads)
+fake_scores = read_map(dmso_data.uns["mantispy"]["map"])
+print(
+    f"fake DMSO treatments: {(fake_scores['mAP_pvalue'] < 0.05).sum()}/{fake_scores.height} with p < 0.05 "
+    f"({100 * (fake_scores['mAP_pvalue'] < 0.05).mean():.1f}%), {(fake_scores['mAP_qvalue'] < fdr).sum()} with q < {fdr}; "
+    f"median mAP {fake_scores['mAP'].median():.3f}"
+)
+
+
+# In[8]:
+
+
+# figure: mAP against DMSO for every treatment and dose, per plate and cell line
+# grey band = chance level: the mAP range of the 20 fake treatments made of random DMSO wells (same panel)
+y_of = {p: i for i, p in enumerate(perturbation_order)}
+fig, axes = plt.subplots(2, 3, figsize=(7.2, 6.6), sharex=True, sharey=True, layout="constrained")
+for i, line in enumerate(line_order):
+    for j, time in enumerate(plate_order):
+        ax = axes[i, j]
+        sub = scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))
+        fake = fake_scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))["mAP"].to_numpy()
+        ax.axvspan(0, fake.max(), color="#e6e6e6", lw=0, zorder=0)
+        y = np.array([y_of[p] for p in sub["perturbation"]])
+        x = sub["mAP"].to_numpy()
+        colors = np.array([well_type_colors[w] for w in sub["well_type"]])
+        active = sub["active"].to_numpy()
+        # filled = active (q < 0.05), hollow = not active
+        ax.scatter(x[active], y[active], s=14, c=colors[active], linewidths=0, zorder=3)
+        ax.scatter(x[~active], y[~active], s=14, facecolors="white", edgecolors=colors[~active], linewidths=0.8, zorder=3)
+        ax.set_title(f"{line}, {time}  ({active.sum()} of {sub.height} active)")
+        ax.grid(axis="y", color="#f0f0f0", lw=0.5, zorder=0)
+        if i == 1:
+            ax.set_xlabel("mAP against DMSO")
+axes[0, 0].set_yticks(range(len(perturbation_order)), [pretty(p) for p in perturbation_order])
+axes[0, 0].invert_yaxis()
+axes[0, 0].set_xlim(-0.02, 1.02)
+for ax in axes.flat:
+    ax.tick_params(axis="y", labelsize=5.5)
+handles = [
+    Patch(color="#e6e6e6", label="chance: mAP of fake DMSO treatments"),
+    Line2D([], [], marker="o", ls="", color=well_type_colors["compound"], markersize=4, label="compound, active (q < 0.05)"),
+    Line2D([], [], marker="o", ls="", color=well_type_colors["ligand"], markersize=4, label="ligand, active (q < 0.05)"),
+    Line2D([], [], marker="o", ls="", markerfacecolor="white", markeredgecolor="black", markersize=4, label="not active"),
+]
+fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.05), ncols=4)
+fig.suptitle("Which treatments differ from DMSO? mAP of each treatment and dose")
+save_figure(fig, "02b_map-against-dmso")
+
+
+# **Result of 2b:**
+# 
+# - CBK600005 scores near 1 at every dose, time and cell line.
+# - TGFβ1 becomes active at 4h in CL2, and at 24h in both cell lines. CBK041498 and CBK175924 are active mainly at 2 mM. CBK200566 is active at all doses in CL2 at 24h.
+# - IL6 and CBK600008 stay inside or near the grey band, and are never active.
+# - The grey band is widest in CL1 at 24h, the plate with uneven cell numbers.
+
+# ### 2c. The two readouts side by side, and the DMSO checks
+# 
+# The table and figure below give, per plate and cell line, the share of treatments that replicate (2a) and that are active (2b). The right panel shows the DMSO-only checks of both readouts. About 5% should pass by chance.
+
+# In[9]:
+
+
+# one summary row per plate and cell line
+panel_summary = []
+for time, line in panels:
+    sub = scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))
+    fake_sub = fake_scores.filter((pl.col("time_point") == time) & (pl.col("cell_line") == line))
+    panel_summary.append({
+        "time_point": time, "cell_line": line, "treatments": sub.height, "treatments_with_3_wells": int((sub["n_wells"] == 3).sum()),
+        "corr_threshold": corr_thresholds[(time, line)],
+        "percent_replicating": 100 * sub["replicating"].mean(),
+        "dmso_sets_passing_corr_pct": 100 * (dmso_scores[(time, line)] > corr_thresholds[(time, line)]).mean(),
+        "percent_active_mAP": 100 * sub["active"].mean(),
+        "fake_dmso_p05_pct": 100 * (fake_sub["mAP_pvalue"] < 0.05).mean(),
+    })
+panel_summary = pl.DataFrame(panel_summary)
+panel_summary.write_csv(table_dir / "panel_summary.csv")
+panel_summary.with_columns(pl.selectors.float().round(1))
+
+
 # In[13]:
 
 
@@ -574,18 +616,22 @@ save_figure(fig, "02_reproducibility-summary")
 
 # **Result:**
 # 
-# - Percent replicating rises with time: 19% (4 of 21) in both cell lines at 1h, 33% (CL1) and 43% (CL2) at 4h, 33% (CL1) and 57% (CL2) at 24h; 43 of 126 tests (34%) overall.
-# - mAP calls 40 of 126 tests active: 14% / 19% at 1h, 19% / 43% at 4h, 43% / 52% at 24h (CL1 / CL2). The two readouts mostly agree: 6 tests replicate without being active, and 3 are active without replicating.
-# - The DMSO controls behave as expected: random DMSO sets pass the correlation threshold 4.6–4.9% of the time (8.4% in CL2 at 4h), and 4 of 120 fake DMSO treatments (3.3%) have mAP p < 0.05, none q < 0.05. 3 of these 4 are in CL1 at 24h, the plate with uneven cell numbers.
-# - **Doses:** CBK600005 replicates at all 3 doses on every plate. CBK041498, CBK175924 and CBK600008 replicate only at 2 mM. CBK200566 (CL2, 4h and 24h) and TGFβ1 (CL2, 24h) also replicate at lower doses. The full list, with the 3 wells of each set, is above and in `replicating_doses.csv`.
-# - CBK175924 2 mM in CL1 at 24h lost a well to well QC; its 2 remaining wells (r = 0.55) fall just below the stricter threshold for 2 wells (0.61).
-# - TGFβ1 10 ng/ml has the highest score in CL1 at 1h (r = 0.95), but its 3 wells (C02, E01, E06) lie in odd rows of columns 1–6, the shifted area of section 3a: this is most likely the plate effect, not TGFβ1.
+# - **Percent replicating (2a)** rises with time: 19% (4 of 21) in both cell lines at 1h, 33% (CL1) and 43% (CL2) at 4h, and 33% (CL1) and 57% (CL2) at 24h. Overall, 43 of 126 tests (34%) replicate.
+# - **mAP (2b)** calls 40 of 126 tests active: 14% / 19% at 1h, 19% / 43% at 4h, and 43% / 52% at 24h (CL1 / CL2).
+# - The two readouts mostly agree. 6 tests replicate without being active, and 3 tests are active without replicating.
+# - **DMSO checks:** random DMSO sets pass the correlation threshold 4.6–4.9% of the time (8.4% in CL2 at 4h). 4 of 120 fake DMSO treatments (3.3%) reach mAP p < 0.05, and none reaches q < 0.05. 3 of these 4 are in CL1 at 24h, the plate with uneven cell numbers.
+# - So both readouts behave as expected on DMSO wells, and the activity calls are not chance.
 
 # ## 3. Replicate health
 # 
 # ### 3a. Are the DMSO wells alike across the plate?
 # 
-# DMSO wells should all look alike, wherever they sit on the plate. For each well we measure its **distance from the DMSO centre** (the Euclidean length of its rescaled profile; 0 is the typical DMSO well). A DMSO well is **unusual** when its distance is above the median + 3 MAD of all DMSO wells of that plate and cell line. Notebook 01 (`03_plate-maps_dmso-distance.png`) draws these wells on the plate and tests which technical factors explain them; here we use them to flag treatments that may only look active because of where their wells sit.
+# DMSO wells should all look alike, wherever they sit on the plate.
+# 
+# - For each well, we measure its **distance from the DMSO centre**: the Euclidean length of its rescaled profile. 0 is the typical DMSO well.
+# - A DMSO well is **unusual** when its distance is above the median + 3 MAD of all DMSO wells of that plate and cell line.
+# 
+# Notebook 01 (`03_plate-maps_dmso-distance.png`) draws these wells on the plate, and tests which technical factors explain them. Here, we use them to flag treatments that may look active only because of where their wells sit.
 # 
 # **Pass if:** unusual DMSO wells are few and scattered, not grouped in one area of the plate.
 
@@ -618,23 +664,25 @@ dmso_health.write_csv(table_dir / "dmso_well_health.csv")
 dmso_health.with_columns(pl.selectors.float().round(2))
 
 
-# **Result:**
+# **Result: FAIL. The unusual DMSO wells group in two kinds of plate area** (plate maps and tests in notebook 01).
 # 
-# **FAIL: the unusual DMSO wells group in two kinds of plate area** (plate maps and tests in notebook 01).
-# 
-# - In CL1 at 1h, 33 of 127 DMSO wells (26%) are unusual, all in the odd rows (A, C, …, O) of columns 1–6. They share one profile (median r = 0.91 between them), so they shifted together. The same pattern is weaker at 4h (11 wells, odd rows, columns 1–5) and gone at 24h. A pattern that follows every other row is technical (most likely liquid handling), not biological.
-# - At 24h, the unusual DMSO wells are the low-count wells: rows M–N in both cell lines, columns 3–4 (rows F–M) in CL1, and columns 20–22 (rows J–N) in CL2; 19 wells in CL1 and 22 in CL2. They have fewer QC-passing cells: median 319 vs 1,670 in CL1, and 2,546 vs 3,251 in CL2. The 2 emptiest DMSO wells of CL1 (L04, N10) already failed well QC.
-# - CL2 at 1h and 4h is nearly clean (2 and 7 unusual DMSO wells; at 4h mostly at the right edge, columns 23–24).
-# - Treated wells in these areas inherit the shift, so a treatment can look active only because of where its wells sit. Below we flag treatments and wells that correlate r ≥ 0.8 with the shared profile of the unusual DMSO wells.
+# - In CL1 at 1h, 33 of 127 DMSO wells (26%) are unusual, all in the odd rows (A, C, …, O) of columns 1–6. They share one profile (median r = 0.91 between them), so they shifted together.
+# - The same pattern is weaker at 4h (11 wells, odd rows, columns 1–5), and gone at 24h. A pattern that follows every other row is technical (most likely liquid handling), not biological.
+# - At 24h, the unusual DMSO wells are the low-count wells: rows M–N in both cell lines, columns 3–4 (rows F–M) in CL1, and columns 20–22 (rows J–N) in CL2. These are 19 wells in CL1 and 22 wells in CL2.
+# - These 24h wells have fewer QC-passing cells: median 319 vs 1,670 in CL1, and 2,546 vs 3,251 in CL2. The 2 emptiest DMSO wells of CL1 (L04, N10) already failed well QC.
+# - CL2 at 1h and 4h is nearly clean (2 and 7 unusual DMSO wells). At 4h, most of them sit at the right edge (columns 23–24).
+# - Treated wells in these areas take on the same shift, so a treatment can look active only because of where its wells sit. Below, we flag treatments and wells that correlate r ≥ 0.8 with the shared profile of the unusual DMSO wells.
 
 # ### 3b. Outlier replicates
 # 
-# For each treatment with 3 wells, we check whether one of them disagrees with the other two. A well is an **outlier replicate** when:
+# For each treatment with 3 wells, we check whether one well disagrees with the other two. A well is an **outlier replicate** in two cases:
 # 
-# - **direction:** its two siblings correlate with each other above chance, but it correlates with neither of them above chance (chance = 95th percentile of the correlation between two wells of different treatments), or
-# - **strength:** it lies beyond the unusual-well limit of the DMSO wells (3a; dashed line in the figure) while both siblings lie below it, or the reverse.
+# - **direction:** its two sibling wells correlate with each other above chance, but the well correlates with neither of them above chance. Chance is the 95th percentile of the correlation between two wells of different treatments.
+# - **strength:** the well lies beyond the unusual-well limit of the DMSO wells (3a, dashed line in the figure) while both siblings lie below it, or the reverse.
 # 
-# We also give each well's cell count, its plate position, and its correlation with the unusual DMSO wells of 3a ("looks like unusual DMSO" when r ≥ 0.8), which helps to tell a technical problem from biology.
+# For each well, we also give its cell count, its plate position, and its correlation with the unusual DMSO wells of 3a ("looks like unusual DMSO" when r ≥ 0.8). These help to tell a technical problem from biology.
+# 
+# **How to read the figure:** the grey band holds the middle 90% of the usual DMSO wells, and the grey line marks the median DMSO well.
 
 # In[15]:
 
@@ -759,14 +807,20 @@ save_figure(fig, "04_replicate-spread-and-outliers")
 
 # **Result:**
 # 
-# - 48 of 372 treated wells (13%) are outlier replicates, in 46 of 124 replicate sets with 3 wells: 33 because of strength, 21 because of direction (6 for both). 17 of the 48 look like the unusual DMSO wells (r ≥ 0.8).
-# - CL1 at 1h has the most outliers (15). In 9 of them, one well lies in the shifted area of 3a while its two siblings do not (e.g. CBK041498 0.2 mM K02, IL6 2.5 ng/ml K04; r = 0.80–0.98 with the unusual DMSO wells). For TGFβ1 2.5 ng/ml it is the reverse: the two "agreeing" wells (A04, A07) are in the shifted area and the flagged well (N12) is the normal one. Plate position, not the treatment, explains these.
-# - At 24h, several outliers are wells with few cells in rows L–N, the band of unusual DMSO wells: CBK200566 0.67 mM N04 (172 cells; siblings 1,311 and 1,137) and TGFβ1 2.5 ng/ml N12 (115 cells) in CL1, and CBK041498 0.67 mM N13 (274 cells; siblings 3,547 and 3,197) and CBK600005 0.67 mM L22 (644 cells) in CL2. The emptiest well (CBK175924 2 mM N08, 62 cells) failed well QC and is already left out.
-# - The full list with positions, cell counts and correlations is in `outlier_replicates.csv`. Consider leaving out these wells, or at least the low-cell wells, in later analyses.
+# - 48 of 372 treated wells (13%) are outlier replicates, in 46 of 124 replicate sets with 3 wells. 33 are outliers because of strength, and 21 because of direction (6 for both). 17 of the 48 look like the unusual DMSO wells (r ≥ 0.8).
+# - CL1 at 1h has the most outliers (15). In 9 of them, one well lies in the shifted area of 3a while its two siblings do not. Examples are CBK041498 0.2 mM K02 and IL6 2.5 ng/ml K04 (r = 0.80–0.98 with the unusual DMSO wells).
+# - For TGFβ1 2.5 ng/ml at 1h, it is the reverse. The two "agreeing" wells (A04, A07) sit in the shifted area, and the flagged well (N12) is the normal one. Plate position, not the treatment, explains these outliers.
+# - At 24h, several outliers are wells with few cells in rows L–N, the band of unusual DMSO wells. In CL1 these are CBK200566 0.67 mM N04 (172 cells, siblings 1,311 and 1,137) and TGFβ1 2.5 ng/ml N12 (115 cells).
+# - In CL2 these are CBK041498 0.67 mM N13 (274 cells, siblings 3,547 and 3,197) and CBK600005 0.67 mM L22 (644 cells). The emptiest well (CBK175924 2 mM N08, 62 cells) failed well QC, so it is already left out.
+# - `outlier_replicates.csv` gives the full list with positions, cell counts and correlations. Consider leaving out these wells (at least the low-cell wells) in later analyses.
 
 # ## 4. Phenotypic strength: how far is each treatment from DMSO?
 # 
-# **Strength** = distance of the consensus profile (median of the replicate wells) from the DMSO centre, divided by the typical distance of a set of 3 DMSO wells from the other DMSO wells (median of 2,000 random sets). A strength of 1 means "as far as 3 random DMSO wells"; 3 means three times further. We show it with the **activity call** (mAP q < 0.05, section 2). We also mark treatments whose consensus looks like the unusual DMSO wells of the same plate (r ≥ 0.8, section 3a).
+# **Strength** = the distance of the consensus profile (median of the replicate wells) from the DMSO centre, divided by the typical distance of a set of 3 DMSO wells from the other DMSO wells. The typical distance is the median of 2,000 random DMSO sets.
+# 
+# - A strength of 1 means "as far as 3 random DMSO wells". A strength of 3 means three times further.
+# - The heatmap marks each **activity call** (mAP q < 0.05, section 2b) with *.
+# - It marks with † each treatment whose consensus looks like the unusual DMSO wells of the same plate (r ≥ 0.8, section 3a).
 # 
 # **Pass if:** every active treatment (mAP) is further from DMSO than a typical set of 3 random DMSO wells (strength above 1).
 
@@ -854,17 +908,26 @@ strength_bar.set_label("strength: distance from DMSO / typical distance of 3 DMS
 save_figure(fig, "05_phenotypic-strength-heatmap")
 
 
-# **Result: PASS.** All 40 active treatments are further from DMSO than a typical set of 3 random DMSO wells (strength 1.2–9.7), and 33 of them lie beyond the 95th percentile of random DMSO sets.
+# **Result: PASS.** All 40 active treatments are further from DMSO than a typical set of 3 random DMSO wells (strength 1.2–9.7). 33 of them lie beyond the 95th percentile of the random DMSO sets.
 # 
 # - 40 of 126 tests are active (mAP q < 0.05): CBK600005 18 of 18, TGFβ1 9, CBK200566 6, CBK041498 4, CBK175924 3, CBK600008 0 and IL6 0 of 18.
-# - **CBK600005** is the strongest treatment: active at every dose, time and cell line (strength 3.3–9.7), strongest in CL2 at 24h (8.5–9.7). At 24h it also lowers the number of QC-passing cells to 35–54% (CL1) and 38–47% (CL2) of DMSO (`cell_ratio` in the table above; notebook 04 tests cell loss), so part of its effect may be toxicity.
-# - **TGFβ1** is active at all 3 doses in both cell lines at 24h (strength 2.3–3.4), and in CL2 already at 4h (2.5 and 10 ng/ml). In CL1 at 24h it also lowers the number of QC-passing cells to 45–51% of DMSO. Its high strength in CL1 at 1h (3.6 and 5.1) and 4h (4.4) comes with † (r = 0.91–0.98 with the unusual DMSO wells): this is mostly the plate-position effect. The only active test with † is TGFβ1 10 ng/ml at 4h in CL1.
-# - **IL6** is never active (strength 0.7–1.6), as expected. **CBK600008** is never active either (0.7–1.3).
-# - **CBK200566** is active at all doses in CL2 at 24h (3.5–6.5, cells 54–73% of DMSO), and at 2 mM in CL1 at 24h (3.2). **CBK041498** and **CBK175924** are active mainly at 2 mM, at 24h, and in CL2 also at 4h (CBK175924 2 mM in CL2 already at 1h).
+# - **CBK600005** is the strongest treatment. It is active at every dose, time and cell line (strength 3.3–9.7), and strongest in CL2 at 24h (8.5–9.7).
+# - At 24h, CBK600005 also lowers the number of QC-passing cells to 35–54% (CL1) and 38–47% (CL2) of DMSO (`cell_ratio` in the table above). So part of its effect may be toxicity. Notebook 04 tests cell loss.
+# - **TGFβ1** is active at all 3 doses in both cell lines at 24h (strength 2.3–3.4), and in CL2 already at 4h (2.5 and 10 ng/ml). In CL1 at 24h, it also lowers the number of QC-passing cells to 45–51% of DMSO.
+# - The high TGFβ1 strength in CL1 at 1h (3.6 and 5.1) and 4h (4.4) comes with † (r = 0.91–0.98 with the unusual DMSO wells). So it is mostly the plate-position effect. The only active test with † is TGFβ1 10 ng/ml at 4h in CL1.
+# - **IL6** is never active (strength 0.7–1.6). **CBK600008** is never active either (0.7–1.3).
+# - **CBK200566** is active at all doses in CL2 at 24h (3.5–6.5, cells 54–73% of DMSO), and at 2 mM in CL1 at 24h (3.2).
+# - **CBK041498** and **CBK175924** are active mainly at 2 mM at 24h, and in CL2 also at 4h. CBK175924 2 mM in CL2 is active already at 1h.
 
 # ## 5. Dose and time
 # 
-# The strength heatmap above shows each agent across the 3 doses and 3 time points. To test for a **dose response**, we correlate the distance of each of the 9 wells (3 doses × 3 replicates, fewer when a well failed QC) from the DMSO centre with the dose rank (Spearman ρ), per plate and cell line, and correct for the 42 tests (Benjamini–Hochberg). Time and exposure settings cannot be separated, so a trend in time can also come from the longer ER and AGP exposures of the 24h plate.
+# The strength heatmap above shows each agent across the 3 doses and 3 time points. To test for a **dose response**, we do three steps per plate and cell line:
+# 
+# 1. Take the distance from the DMSO centre of each of the 9 wells of an agent (3 doses × 3 replicates, fewer when a well failed QC).
+# 2. Correlate these distances with the dose rank (Spearman ρ).
+# 3. Correct for the 42 tests (Benjamini–Hochberg).
+# 
+# The data cannot separate time from the exposure settings. So a trend in time can also come from the longer ER and AGP exposures of the 24h plate.
 
 # In[20]:
 
@@ -888,14 +951,18 @@ dose_response.filter(pl.col("pvalue") < 0.05).sort("agent", "cell_line", "time_p
 
 # **Result:**
 # 
-# - Only 1 of 42 dose tests is significant after correction: CBK600005 in CL1 at 4h (ρ = 0.95, q = 0.004). With 3 doses × 3 wells the test has little power. CBK041498 (both cell lines) and CBK175924 (CL2) at 24h rise with dose (ρ = 0.79–0.84, p < 0.05, q = 0.06–0.09).
-# - CBK600005 is already at full strength at the lowest stock dose (0.2 mM): its strength is about the same at all 3 doses (heatmap above), so the tested doses are probably all above saturation.
-# - Most active agents are strongest at 24h. TGFβ1 in CL2 grows with time (1.0–1.1 at 1h, 1.2–2.2 at 4h, 2.3–3.4 at 24h), with the medium dose (5 ng/ml) furthest from DMSO at 4h and 24h: no clean dose response. In CL1, TGFβ1 is only clean at 24h (2.4, 3.1, 3.3 from low to high dose).
-# - IL6 stays near DMSO (0.7–1.6) at all doses and times. Remember that the 24h plate also had longer ER and AGP exposures.
+# - Only 1 of 42 dose tests is significant after correction: CBK600005 in CL1 at 4h (ρ = 0.95, q = 0.004). With 3 doses × 3 wells, the test has little power.
+# - CBK041498 (both cell lines) and CBK175924 (CL2) at 24h rise with dose (ρ = 0.79–0.84, p < 0.05, q = 0.06–0.09).
+# - CBK600005 has full strength already at the lowest stock dose (0.2 mM). Its strength is about the same at all 3 doses (heatmap above), so the tested doses are probably all above saturation.
+# - Most active agents are strongest at 24h. TGFβ1 in CL2 grows with time (1.0–1.1 at 1h, 1.2–2.2 at 4h, 2.3–3.4 at 24h).
+# - The medium TGFβ1 dose (5 ng/ml) is furthest from DMSO at 4h and 24h, so TGFβ1 shows no clean dose response. In CL1, the TGFβ1 dose order is clean only at 24h (2.4, 3.1, 3.3 from low to high dose).
+# - IL6 stays near DMSO (0.7–1.6) at all doses and times. The 24h plate also had longer ER and AGP exposures.
 
 # ## 6. Which treatments look alike?
 # 
-# We take the consensus profiles of the active treatments (mAP q < 0.05) and correlate every pair (Pearson r over all features). Treatments with a similar effect on the cells correlate strongly; the clustering puts them next to each other. Treatments marked † look like the unusual DMSO wells of their plate (section 3a).
+# ### 6a. Similarity between active treatments
+# 
+# We take the consensus profiles of the active treatments (mAP q < 0.05), and correlate every pair (Pearson r over all features). Treatments with a similar effect on the cells correlate strongly, and the clustering puts them next to each other. A † marks treatments that look like the unusual DMSO wells of their plate (section 3a).
 
 # In[21]:
 
@@ -960,9 +1027,9 @@ grid.figure.suptitle("Which active treatments change the cells in the same way? 
 save_figure(grid.figure, "07_active-treatment-similarity")
 
 
-# ### Which feature groups change most?
+# ### 6b. Which feature groups change most?
 # 
-# For the strongest active treatment of each agent and cell line (leaving out †), we average the absolute rescaled values of the consensus profile within each compartment × channel group (e.g. all cytoplasm ER features). Shape features have no channel; colocalization features use two channels.
+# We take the strongest active treatment of each agent and cell line, and leave out the † treatments. For each, we average the absolute rescaled values of the consensus profile within each compartment × channel group (for example, all cytoplasm ER features). Shape features have no channel. Colocalization features use two channels.
 
 # In[23]:
 
@@ -1019,10 +1086,17 @@ save_figure(fig, "08_feature-groups-strongest-treatments")
 
 # **Result:**
 # 
-# - Among the 40 active treatments, those of the same agent correlate more (median r = 0.36) than those of different agents (median r = −0.06). The doses of one compound at one time point are nearly identical (CBK600005: median r = 0.93–0.95 within each time and cell line; CBK200566 in CL2 at 24h: 0.89; TGFβ1 at 24h: 0.80–0.82): dose changes the size of the effect, not its direction.
-# - The two cell lines respond differently: CBK600005 correlates r = 0.46 between CL1 and CL2 at 1h, 0.64 at 4h, but only 0.13 at 24h; TGFβ1 at 24h r = 0.19.
-# - No two different compounds look alike: the most similar pair of different agents reaches only r = 0.50 (CBK175924 2 mM 1h CL2 vs TGFβ1 10 ng/ml 24h CL2). TGFβ1 in CL2 shares part of its profile with CBK600005 at 24h in CL2 (median r = 0.42).
-# - Feature groups: CBK600005 at 24h changes nuclear DNA and AGP features most in CL2 (mean |change| 9.0 and 8.7) and cell and nuclear shape in CL1 (5.1); CBK200566 mainly DNA features (2.7 in CL1; nuclear DNA 5.6 and shape 5.0 in CL2); TGFβ1 mostly ER and AGP (2.7–3.2); CBK041498 and CBK175924 in CL2 mostly Mito (2.8–3.3). ER and AGP changes at 24h may partly reflect the longer exposures of that plate, although every comparison is against DMSO of the same plate.
+# - Among the 40 active treatments, treatments of the same agent correlate more (median r = 0.36) than treatments of different agents (median r = −0.06).
+# - The doses of one compound at one time point are nearly identical: CBK600005 median r = 0.93–0.95 within each time and cell line, CBK200566 in CL2 at 24h 0.89, TGFβ1 at 24h 0.80–0.82. So dose changes the size of the effect, not its direction.
+# - The two cell lines respond differently. CBK600005 correlates r = 0.46 between CL1 and CL2 at 1h, 0.64 at 4h, but only 0.13 at 24h. For TGFβ1 at 24h, r = 0.19.
+# - No two different compounds look alike. The most similar pair of different agents reaches only r = 0.50 (CBK175924 2 mM 1h CL2 vs TGFβ1 10 ng/ml 24h CL2). TGFβ1 in CL2 shares part of its profile with CBK600005 at 24h in CL2 (median r = 0.42).
+# - **Feature groups:** CBK600005 at 24h changes nuclear DNA and AGP features most in CL2 (mean |change| 9.0 and 8.7), and cell and nuclear shape in CL1 (5.1).
+# - CBK200566 changes mainly DNA features (2.7 in CL1, nuclear DNA 5.6 and shape 5.0 in CL2). TGFβ1 changes mostly ER and AGP (2.7–3.2). CBK041498 and CBK175924 in CL2 change mostly Mito (2.8–3.3).
+# - The ER and AGP changes at 24h may partly come from the longer exposures of that plate, although every comparison is against DMSO of the same plate.
+
+# ## 7. Save the results
+# 
+# We save the main table: one row per treatment, plate and cell line, with the replicate correlation, mAP, strength and flags.
 
 # In[25]:
 
@@ -1035,25 +1109,31 @@ scores.sort("cell_line", "time_point", pl.col("perturbation").replace_strict({p:
 
 # ## Summary
 # 
-# **Data:** 1,136 QCed well profiles (1,399 features; 4 wells left out by well QC) from 3 plates (1h, 4h, 24h) × 2 cell lines; 21 treatments × 3 replicate wells and 127 DMSO wells per plate and cell line.
+# **Data:** 1,136 QCed well profiles (1,399 features, 4 wells left out by well QC) from 3 plates (1h, 4h, 24h) × 2 cell lines. Each plate and cell line has 21 treatments × 3 replicate wells, and 127 DMSO wells.
 # 
-# **What we did:** clipped extreme values at ±20 and rescaled each feature to the DMSO well-to-well spread; measured replicate agreement for each compound and dose (percent replicating against a non-replicate null) and activity (mAP against DMSO, q < 0.05), with DMSO-only negative control checks; checked the DMSO wells across the plate; flagged outlier replicate wells; measured the strength of each treatment, dose and time trends, and similarity between active treatments.
+# **What we did:**
+# 
+# 1. We clipped extreme values at ±20, and rescaled each feature to the DMSO well-to-well spread.
+# 2. We measured replicate agreement (percent replicating against a non-replicate null) and activity (mAP against DMSO, q < 0.05), with DMSO-only negative controls.
+# 3. We checked the DMSO wells across the plate, and flagged outlier replicate wells.
+# 4. We measured the strength of each treatment, the dose and time trends, and the similarity between active treatments.
 # 
 # **Findings:**
 # 
-# - Reproducibility grows with time: percent replicating 19% / 19% at 1h, 33% / 43% at 4h, 33% / 57% at 24h (CL1 / CL2); 40 of 126 tests active by mAP. DMSO checks are at chance (about 5%; 3.3% for mAP).
-# - Doses: CBK600005 works at all 3 doses, already at 0.2 mM; CBK041498, CBK175924 and CBK600008 only at 2 mM; CBK200566 (CL2) and TGFβ1 (CL2, 24h) also at lower doses.
-# - CL1 at 1h and 4h has a strong plate-position effect: 33 (1h) and 11 (4h) of 127 DMSO wells are shifted, all in odd rows of columns 1–6. At 24h, low-cell wells in rows M–N (both lines), columns 3–4 (CL1) and columns 20–22 (CL2) are shifted. These explain most outlier replicates and the apparent TGFβ1 effect in CL1 at 1h and 4h.
-# - 48 of 372 treated wells (13%) are outlier replicates, many in the shifted areas or with few cells.
-# - CBK600005 is active in all 18 tests (strength up to 9.7), flat across doses, and halves the cell count at 24h (35–54% of DMSO): strong effect, possibly with toxicity.
-# - TGFβ1 is active at all doses at 24h in both lines and grows with time in CL2; no clean dose response (5 ng/ml strongest in CL2). IL6 and CBK600008 are never active.
-# - CBK200566 is strongly active in CL2 at 24h (all doses); CBK041498 and CBK175924 are active mainly at 2 mM.
-# - Doses of one compound share one profile; different compounds do not look alike (r ≤ 0.50); the two cell lines respond differently to the same treatment (e.g. r = 0.13 for CBK600005 at 24h).
+# - Reproducibility grows with time. Percent replicating is 19% / 19% at 1h, 33% / 43% at 4h, and 33% / 57% at 24h (CL1 / CL2). 40 of 126 tests are active by mAP. The DMSO checks are at chance (about 5%, and 3.3% for mAP).
+# - Doses: CBK600005 works at all 3 doses, already at 0.2 mM. CBK041498, CBK175924 and CBK600008 replicate only at 2 mM. CBK200566 (CL2) and TGFβ1 (CL2, 24h) also replicate at lower doses.
+# - CL1 at 1h and 4h has a strong plate-position effect: 33 (1h) and 11 (4h) of 127 DMSO wells are shifted, all in odd rows of columns 1–6. At 24h, low-cell wells are shifted: rows M–N (both lines), columns 3–4 (CL1) and columns 20–22 (CL2).
+# - These shifted areas explain most outlier replicates, and the apparent TGFβ1 effect in CL1 at 1h and 4h.
+# - 48 of 372 treated wells (13%) are outlier replicates. Many of them sit in the shifted areas or have few cells.
+# - CBK600005 is active in all 18 tests (strength up to 9.7), flat across doses, and halves the cell count at 24h (35–54% of DMSO). It has a strong effect, possibly with toxicity.
+# - TGFβ1 is active at all doses at 24h in both lines, and grows with time in CL2. It shows no clean dose response (5 ng/ml strongest in CL2). IL6 and CBK600008 are never active.
+# - CBK200566 is strongly active in CL2 at 24h (all doses). CBK041498 and CBK175924 are active mainly at 2 mM.
+# - The doses of one compound share one profile. Different compounds do not look alike (r ≤ 0.50). The two cell lines respond differently to the same treatment (for example, r = 0.13 for CBK600005 at 24h).
 # 
 # **Caveats:**
 # 
-# - Time is confounded with exposure (24h plate: longer ER and AGP exposures), and cell line with plate side.
-# - Compound doses are stock concentrations; final concentrations are unknown.
-# - Only 3 replicates and 3 doses: dose tests have little power, and one bad well changes a result.
-# - The plate-position effects are not corrected here; the "looks like unusual DMSO" flag (r ≥ 0.8) is a simple screen, not a correction.
-# - Cell number drives many features (notebook 01); treatments that lower cell number at 24h (notebook 04) should not be read as pure morphology.
+# - Time changes together with exposure (the 24h plate used longer ER and AGP exposures), and cell line changes together with plate side.
+# - Compound doses are stock concentrations. The final concentrations are unknown.
+# - Only 3 replicates and 3 doses: the dose tests have little power, and one bad well changes a result.
+# - We do not correct the plate-position effects here. The "looks like unusual DMSO" flag (r ≥ 0.8) is a simple screen, not a correction.
+# - Cell number drives many features (notebook 01). Do not read the profiles of treatments that lower cell number at 24h (notebook 04) as pure morphology.

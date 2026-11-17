@@ -3,25 +3,29 @@
 
 # # Preprocessing
 # 
-# **Goal:** turn the single-cell measurements into profiles that can be compared across treatments, plates and cell lines.
+# **Goal:** turn the single-cell measurements into profiles that we can compare across treatments, plates and cell lines.
 # 
-# We use [mantispy](https://github.com/scverse/mantispy) for 4 steps, in this order:
+# After loading the cells (section 1), we use [mantispy](https://github.com/scverse/mantispy) for 5 steps, in this order:
 # 
-# 1. **Annotation:** add what each well received (compound or ligand, and its dose), and mark the DMSO wells as controls.
-# 2. **Normalization (MAD):** express every feature relative to the DMSO cells of the same plate and cell line.
-# 3. **Feature selection:** drop features that are uninformative or repeat another feature.
-# 4. **Aggregation:** take the median of the cells in each well, to get one profile per well.
+# 1. **Annotation (section 2):** add what each well received (compound or ligand, and its dose), and mark the DMSO wells as controls.
+# 2. **Normalization, MAD (section 3):** express every feature relative to the DMSO cells of the same plate and cell line.
+# 3. **Feature selection (section 4):** drop features that carry no information or repeat another feature.
+# 4. **Well QC (section 5):** flag wells with too few cells.
+# 5. **Aggregation (section 6):** take the median of the cells in each well, to get one profile per well.
 # 
-# We run these steps on two sets of cells, and save 4 profiles, each with all 3 plates:
+# Section 7 saves the results. We run these steps on two sets of cells, and save 4 profiles, each with all 3 plates:
 # 
 # | Set | Cells | Single-cell profile | Well profile |
 # |---|---|---|---|
 # | **All cells** | every cell | `norm_fs_Panc1_hPSC_sc-profiles.parquet` | `agg_norm_fs_Panc1_hPSC_well-profiles.parquet` |
 # | **QCed** | only cells that pass both image QC and profile QC | `qced_norm_fs_Panc1_hPSC_sc-profiles.parquet` | `qced_agg_norm_fs_Panc1_hPSC_well-profiles.parquet` |
 # 
-# The prefixes say what was done: **qced** = bad images and bad cells removed, **norm** = MAD-normalized, **fs** = feature-selected, **agg** = aggregated per well. Each set is normalized and feature-selected on its own, so that bad cells never shape the QCed profiles. The all-cells profiles keep the QC columns, so cells can still be filtered later.
+# The prefixes name the steps: **qced** = bad images and bad cells removed, **norm** = MAD-normalized, **fs** = feature-selected, **agg** = aggregated per well.
 # 
-# **Result:** 4 profiles, each with the 3 plates and 1,140 wells: 2,647,721 cells with 1,394 features (all cells) and 2,185,564 cells with 1,399 features (QCed). 4 QCed wells on the 24h CL1 plate fail well QC, because they have fewer than 100 cells.
+# - Each set gets its own normalization and feature selection, so bad cells never shape the QCed profiles.
+# - The all-cells profiles keep the QC columns, so a later analysis can still filter the cells.
+# 
+# **Summary of the result:** 4 profiles, each with the 3 plates and 1,140 wells. The all-cells set has 2,647,721 cells with 1,394 features. The QCed set has 2,185,564 cells with 1,399 features. 4 QCed wells on the 24h CL1 plate fail well QC, because they have fewer than 100 cells.
 # 
 # | Term | Meaning |
 # |---|---|
@@ -32,7 +36,7 @@
 # 
 # ## Setup
 # 
-# Run with `_run.sbatch`. The data of 2.6 million cells is held in memory, so the job asks for 400 GB.
+# Run with `_run.sbatch`. The job holds the data of 2.6 million cells in memory, so it asks for 400 GB.
 
 # In[1]:
 
@@ -119,7 +123,7 @@ pl.Config.set_tbl_width_chars(170)
 
 # ## 1. Load the cells
 # 
-# We load every cell of the QC profile, with its metadata (including the QC columns) and all compartment measurements. We leave out the 4 columns that hold the ID number of a neighboring cell (`...ClosestObjectNumber...`): they are labels, not measurements.
+# We load every cell of the QC profile, with its metadata (including the QC columns) and all compartment measurements. We leave out the 4 columns that hold the ID number of a neighboring cell (`...ClosestObjectNumber...`). These columns are labels, not measurements.
 
 # In[3]:
 
@@ -142,8 +146,8 @@ print(f"{cells.height:,} cells, {len(metadata_columns)} metadata columns, {len(c
 qc_counts
 
 
-# **Result:** 2,647,721 cells in total. 2,185,564 of them pass both QC checks (73.1–88.9% per plate and cell line).
-# 
+# **Result:** the data hold 2,647,721 cells in total. 2,185,564 of them pass both QC checks (73.1–88.9% per plate and cell line).
+
 # ## 2. Annotation
 # 
 # We add what each well received, from the plate map and the ligand file:
@@ -154,7 +158,7 @@ qc_counts
 # | `Metadata_ligand`, `Metadata_ligand_dose`, `Metadata_ligand_ng_per_ml` | The ligand (TGFb1 or IL6), its dose level (L, M or H), and that dose in ng/ml |
 # | `Metadata_Perturbation` | One name per condition, for example `CBK041498_0.67`, `TGFb1_L` or `DMSO` |
 # 
-# mantispy then marks the DMSO wells as negative controls (`Metadata_Control_Type`). Normalization uses them. Finally, we split the cells into the two sets: all cells, and the QCed cells.
+# mantispy then marks the DMSO wells as negative controls (`Metadata_Control_Type`), which normalization uses. Finally, we split the cells into the two sets: all cells, and the QCed cells.
 # 
 # **Pass if:** every cell gets a perturbation, and the plate map agrees with the treatment that QC recorded for each well.
 
@@ -230,15 +234,21 @@ for name, profile in profiles.items():
 in_order(pl.concat(rows).select("profiles", pl.exclude("profiles")))
 
 
-# **Result: PASS.** Every cell has a perturbation, and the plate map agrees with the QC treatment in every well. Each plate and cell line has 22 perturbations: DMSO, 5 compounds at 3 doses, and 2 ligands at 3 doses. The DMSO controls number 232,164–450,511 cells per plate and cell line in the all-cells set, and 181,683–397,451 in the QCed set.
+# **Result: PASS.**
 # 
+# - Every cell has a perturbation, and the plate map agrees with the QC treatment in every well.
+# - Each plate and cell line has 22 perturbations: DMSO, 5 compounds at 3 doses, and 2 ligands at 3 doses.
+# - The DMSO controls hold 232,164–450,511 cells per plate and cell line in the all-cells set, and 181,683–397,451 cells in the QCed set.
+
 # ## 3. Normalization (MAD)
 # 
 # Raw features differ between plates and cell lines for reasons unrelated to treatment, such as the longer exposures of the 24h plate. So, for each plate and cell line, we rescale every feature against the DMSO cells:
 # 
 # `normalized value = (value − DMSO median) / (1.4826 × DMSO MAD)`
 # 
-# A value of 0 means "like DMSO", and a value of 3 means 3 spreads above DMSO. The factor 1.4826 makes the MAD comparable to a standard deviation. Each set uses its own DMSO cells: the QCed set uses only DMSO cells that pass QC.
+# - A value of 0 means "like DMSO", and a value of 3 means 3 spreads above DMSO.
+# - The factor 1.4826 makes the MAD comparable to a standard deviation.
+# - Each set uses its own DMSO cells. The QCed set uses only DMSO cells that pass QC.
 # 
 # **Pass if:** in every plate and cell line, the DMSO cells end at a median of 0 and a spread of about 1 for each feature.
 
@@ -270,8 +280,11 @@ for name, profile in profiles.items():
 in_order(pl.DataFrame(rows))
 
 
-# **Result: PASS.** In every plate and cell line, the DMSO cells end at a median of 0 and a spread of 1. 146 features (all cells) and 150 (QCed) have no spread in the DMSO cells of at least one plate and cell line, so they cannot be scaled; feature selection drops them.
+# **Result: PASS.**
 # 
+# - In every plate and cell line, the DMSO cells end at a median of 0 and a spread of 1.
+# - 146 features (all cells) and 150 features (QCed) have no spread in the DMSO cells of at least one plate and cell line. Normalization cannot scale them, so feature selection drops them.
+
 # ## 4. Feature selection
 # 
 # Many CellProfiler features carry no information, or repeat another feature. We drop a feature if any of these is true:
@@ -327,11 +340,19 @@ pl.DataFrame(dropped)
 pl.concat(kept_by_group).pivot(on="profiles", index="group", values="len").sort("group")
 
 
-# **Result: PASS.** Of 3,052 features, 1,394 are kept for all cells and 1,399 for the QCed cells (1,326 in both). Most dropped features repeat another one (correlation: 1,421). The extreme-value filter alone would drop 319 and 295 features, many of which another filter also drops. The kept features cover the 3 compartments and all 5 channels (204–243 features per channel).
+# **Result: PASS.**
 # 
+# - Of 3,052 features, 1,394 are kept for all cells and 1,399 for the QCed cells (1,326 in both).
+# - Most dropped features repeat another feature (correlation: 1,421).
+# - The extreme-value filter alone would drop 319 and 295 features. Another filter also drops many of these.
+# - The kept features cover the 3 compartments and all 5 channels (204–243 features per channel).
+
 # ## 5. Well QC
 # 
-# Some wells have very few cells left after QC, for example in the low-count areas of the 24h plate. The median of a few cells is noisy. We mark each well `pass` or `fail` in `Metadata_well_qc`, with the reason in `Metadata_well_qc_reason`, using mantispy's well QC. No well is removed.
+# Some wells have very few cells left after QC, for example in the low-count areas of the 24h plate. The median of a few cells is noisy.
+# 
+# - mantispy's well QC marks each well `pass` or `fail` in `Metadata_well_qc`, with the reason in `Metadata_well_qc_reason`.
+# - No well is removed. Later notebooks leave out the wells that fail.
 # 
 # **Pass if:** only a few wells fail, and only for a clear reason.
 
@@ -368,11 +389,15 @@ pl.Config.set_fmt_str_lengths(45)
 pl.concat(rows)
 
 
-# **Result: PASS.** No well fails in the all-cells set. In the QCed set, 4 of 1,140 wells fail, all on the 24h plate in CL1 and all for having fewer than 100 cells: L04 (89), N03 (76), N08 (62) and N10 (39). They lie in the low-count area of that plate. They keep their profile, flagged `fail`.
+# **Result: PASS.**
 # 
+# - No well fails in the all-cells set.
+# - In the QCed set, 4 of 1,140 wells fail, all on the 24h plate in CL1, and all because they have fewer than 100 cells: L04 (89), N03 (76), N08 (62) and N10 (39).
+# - These wells lie in the low-count area of that plate. They keep their profile, flagged `fail`.
+
 # ## 6. Aggregation
 # 
-# We take the median of the cells in each well, feature by feature, to get one profile per well. The median is not moved by a few unusual cells. `Metadata_CellCount` records how many cells each well profile is based on.
+# We take the median of the cells in each well, feature by feature, to get one profile per well. A few unusual cells do not move the median. `Metadata_CellCount` records how many cells each well profile uses.
 # 
 # **Pass if:** every imaged well of the 3 plates gets a profile, in both sets.
 
@@ -393,13 +418,16 @@ for name, well_profile in wells.items():
 in_order(pl.concat(rows).select("profiles", pl.exclude("profiles")))
 
 
-# **Result: PASS.** Each set has 1,140 well profiles, 190 per plate and cell line. A QCed well holds a median of 1,490–3,186 cells, depending on the plate and cell line; the fewest is 39 (24h, CL1), a well that fails well QC.
+# **Result: PASS.**
 # 
+# - Each set has 1,140 well profiles, 190 per plate and cell line.
+# - A QCed well holds a median of 1,490–3,186 cells, depending on the plate and cell line. The fewest is 39 (24h, CL1), a well that fails well QC.
+
 # ## 7. Save the profiles
 # 
 # We save the 4 profiles listed at the top. In each set, the single-cell and well profiles hold the same features, after the `Metadata_` columns.
 # 
-# **Pass if:** each file holds the 3 plates, the expected rows, and its set's features.
+# **Pass if:** each file holds the 3 plates, the expected rows, and the features of its set.
 
 # In[10]:
 
@@ -436,13 +464,17 @@ pl.Config.set_fmt_str_lengths(60)
 pl.DataFrame(rows)
 
 
-# **Result: PASS.** Every file holds the 3 plates. The single-cell files hold 2,647,721 and 2,185,564 cells, the well files 1,140 wells each. In the single-cell files, 520 (all cells) and 512 (QCed) features are missing in some cells; the well files have no missing values.
+# **Result: PASS.**
 # 
+# - Every file holds the 3 plates.
+# - The single-cell files hold 2,647,721 and 2,185,564 cells, and the well files hold 1,140 wells each.
+# - In the single-cell files, 520 (all cells) and 512 (QCed) features are missing in some cells. The well files have no missing values.
+
 # ## Summary
 # 
 # - **Annotation:** every cell has its treatment and dose. Each plate and cell line has 22 perturbations: DMSO, 5 compounds and 2 ligands, each at 3 doses.
 # - **Normalization:** every feature is expressed against the DMSO cells of the same plate and cell line (0 = like DMSO).
-# - **Feature selection:** 3,052 features → 1,394 (all cells) and 1,399 (QCed). It drops repeated features, features that cannot be scaled, and features with extreme values. The 4 ID columns of neighboring cells are not used as features.
-# - **Well QC:** 4 QCed wells on the 24h CL1 plate have fewer than 100 cells and are flagged `fail` in `Metadata_well_qc`.
+# - **Feature selection:** 3,052 features → 1,394 (all cells) and 1,399 (QCed). It drops repeated features, features that cannot be scaled, and features with extreme values. The 4 ID columns of neighboring cells are not features.
+# - **Well QC:** 4 QCed wells on the 24h CL1 plate have fewer than 100 cells, flagged `fail` in `Metadata_well_qc`.
 # - **Aggregation:** one profile per well, the median of its cells: 1,140 wells per set.
 # - **Use** the `qced_` profiles for analysis, and keep the wells where `Metadata_well_qc` is `pass`.

@@ -3,14 +3,21 @@
 
 # # Explore the metadata
 # 
-# **Question:** how was the screen set up and imaged, and how many cells does each well hold, before we look at the profiles?
+# **Question:** how was the screen set up and imaged, and how many cells does each well hold? We answer this before we look at the profiles.
 # 
-# We show where each control, ligand and compound (and its dose) sits on the plate, how the plates were imaged, and how many cells each well holds. Cell number matters because crowded cells look different (smaller, rounder), so an uneven plate adds differences that have nothing to do with treatment. Notebook 01 tests how much cell number changes the profiles, and notebook 04 tests which treatments lower cell number.
+# This notebook shows three things:
+# 
+# - where each control, ligand and compound (and its dose) sits on the plate.
+# - how the microscope imaged the plates.
+# - how many cells each well holds.
+# 
+# Cell number matters because crowded cells look different (smaller, rounder). So an uneven plate adds differences that have nothing to do with treatment. Notebook 01 tests how much cell number changes the profiles. Notebook 04 tests which treatments lower cell number.
 # 
 # Sections: 1. load the well tables, 2. screen design, 3. imaging, 4. cell counts on the plates, 5. DMSO control wells.
 # 
 # Terms used below:
-# - **Field of view:** one position imaged in a well (9 per well, in a 3 × 3 grid), each imaged in 5 channels.
+# 
+# - **Field of view:** one position imaged in a well (9 per well, in a 3 × 3 grid). The microscope images each field of view in 5 channels.
 # - **All cells:** every cell found in the 9 fields of view of a well, before quality control (QC).
 # - **QC-passing cells:** cells that passed both image QC (sharp, not saturated) and profile QC (no segmentation errors). The well profiles are the median of these cells.
 # - **log2 ratio:** log2(cells in the well / median cells in the DMSO wells of the same plate and cell line). 0 = like DMSO, −1 = half as many cells, +1 = twice as many.
@@ -142,9 +149,13 @@ def draw_plate(ax, grid, cmap, norm, title, treated=None, flagged=None):
 
 # ## 1. Load the well tables
 # 
-# We read the cell counts of the all-cells table and the QC-passing table, plus the QC labels of every single cell (only 4 small columns of the large single-cell file), and join them into one table with one row per well.
+# We read three inputs, and join them into one table with one row per well:
 # 
-# **Pass if:** both tables have the same 1,140 wells, and the single-cell file gives the same cell totals.
+# 1. the cell counts of the all-cells well table.
+# 2. the cell counts of the QC-passing well table.
+# 3. the QC labels of every single cell (only 4 small columns of the large single-cell file).
+# 
+# **Pass if:** both well tables have the same 1,140 wells, and the single-cell file gives the same cell totals.
 
 # In[3]:
 
@@ -238,18 +249,24 @@ failing_wells.write_csv(table_dir / "well-qc_failing-wells.csv")
 failing_wells
 
 
-# **Result:**
+# **Result: PASS.**
 # 
-# - 1,140 wells (190 per cell line per plate, of which 127 are DMSO). The two well tables and the single-cell file agree on the cell count of every well.
-# - 2,647,721 cells in total; 2,185,564 (82.5%) pass QC.
-# - Well QC: no well fails on all cells. 4 wells fail on QC-passing cells (fewer than 100), all on the 24h plate in CL1: L04 (DMSO, 89 cells), N03 (CBK175924_0.67, 76), N08 (CBK175924_2.0, 62) and N10 (DMSO, 39). Their counts stay in the maps below; their profiles are left out of the other notebooks.
-# - Only 3 wells have an image with no cells at all (24h plate, CL1: M04, N09, N12, inside the low-count area shown below). After QC, 99 wells have lost at least one whole image to image QC.
-# 
+# - The data hold 1,140 wells: 190 per cell line per plate, of which 127 are DMSO. The two well tables and the single-cell file agree on the cell count of every well.
+# - The wells hold 2,647,721 cells in total. 2,185,564 cells (82.5%) pass QC.
+# - Well QC: no well fails on all cells. 4 wells fail on QC-passing cells (fewer than 100). All 4 are on the 24h plate in CL1: L04 (DMSO, 89 cells), N03 (CBK175924_0.67, 76), N08 (CBK175924_2.0, 62) and N10 (DMSO, 39).
+# - These 4 wells stay in the cell count maps below. The other notebooks leave out their profiles.
+# - Only 3 wells have an image with no cells at all (24h plate, CL1: M04, N09, N12). They sit inside the low-count area of section 4. After QC, 99 wells have lost at least one whole image to image QC.
+
 # ## 2. Screen design
 # 
-# All three plates follow one plate map. Columns 1–12 hold cell line CL1 and columns 13–24 hold CL2. Every well received 1,500 nL from the compound plate: DMSO alone, or one of 5 compounds at a stock concentration of 0.2, 0.67 or 2 mM. Ligand wells received DMSO from the compound plate, plus 50, 100 or 200 nL of TGFβ1 or IL6, for a final 2.5, 5 or 10 ng/ml. We read the two layout files and check them against the profiles.
+# All three plates follow one plate map. Columns 1–12 hold cell line CL1, and columns 13–24 hold CL2.
 # 
-# **Pass if:** the layout files agree with the profiles on every plate, every treatment and dose has 3 wells per cell line, and the replicate wells are spread over the plate.
+# - Every well received 1,500 nL from the compound plate. This is DMSO alone, or one of 5 compounds at a stock concentration of 0.2, 0.67 or 2 mM.
+# - Ligand wells received DMSO from the compound plate, plus 50, 100 or 200 nL of TGFβ1 or IL6. This gives a final 2.5, 5 or 10 ng/ml.
+# 
+# We read the two layout files and check them against the profiles.
+# 
+# **Pass if:** the layout files agree with the profiles on every plate. Every treatment and dose has 3 wells per cell line, spread over the plate.
 
 # In[5]:
 
@@ -408,16 +425,21 @@ save_fig(fig, "01_plate-layout_treatments-and-doses")
 
 # **Result: PASS.**
 # 
-# - One layout for all 3 plates. The plate map and the ligand file agree with the profiles in every well, and the CL2 half repeats the CL1 half exactly, 12 columns to the right.
-# - Per cell line and plate: 127 DMSO wells, and 3 wells for each of the 21 treatments (7 agents × 3 doses). Every well received 1,500 nL from the compound plate, so DMSO is the same in all wells. The ligand doses come from different volumes (50, 100 and 200 nL). The 4 corner wells received DMSO but were not imaged.
-# - The replicate wells are spread over the plate: 30 of the 42 replicate sets (per cell line) use 3 different rows and 34 use 3 different columns, and the closest two wells of a set are a median of 4 wells apart. DMSO wells fill the rest of each half, including 62 of the 100 wells on its outer ring.
-# - What the layout cannot do: each cell line always sits on the same half, and each treatment always sits in the same wells on all 3 plates. A position effect therefore looks the same on every plate, and cell line and plate half cannot be told apart.
-# 
+# - All 3 plates use one layout. The plate map and the ligand file agree with the profiles in every well. The CL2 half repeats the CL1 half exactly, 12 columns to the right.
+# - Per cell line and plate, there are 127 DMSO wells and 3 wells for each of the 21 treatments (7 agents × 3 doses).
+# - Every well received 1,500 nL from the compound plate, so the DMSO amount is the same in all wells. The ligand doses come from different volumes (50, 100 and 200 nL). The 4 corner wells received DMSO, but the microscope did not image them.
+# - The replicate wells are spread over the plate. Per cell line, 30 of the 42 replicate sets use 3 different rows, and 34 use 3 different columns. The closest two wells of a set are a median of 4 wells apart.
+# - DMSO wells fill the rest of each half, including 62 of the 100 wells on its outer ring.
+# - **Limit of the layout:** each cell line always sits on the same half, and each treatment always sits in the same wells on all 3 plates. So a position effect looks the same on every plate. The data also cannot separate cell line from plate half.
+
 # ## 3. Imaging
 # 
-# The plates were imaged on a SQUID microscope with a 20× objective: 9 fields of view per well (a 3 × 3 grid, 0.9 mm apart) in 5 channels. The image folders keep the settings of each plate (`parameters.json`) and the position, focus height and time of every image (`coords.jsonl`).
+# A SQUID microscope with a 20× objective imaged the plates. It imaged 9 fields of view per well (a 3 × 3 grid, 0.9 mm apart) in 5 channels. The image folders keep two records per plate:
 # 
-# **Pass if:** the 3 plates were imaged with the same settings, and the focus height changes smoothly across the plate.
+# - `parameters.json`: the settings of the plate.
+# - `coords.jsonl`: the position, focus height and time of every image.
+# 
+# **Pass if:** the microscope used the same settings on the 3 plates, and the focus height changes smoothly across the plate.
 
 # In[8]:
 
@@ -514,17 +536,21 @@ save_fig(fig, "03_plate-maps_imaging-time-and-focus")
 
 # **Result: WARN (settings differ on the 24h plate).**
 # 
-# - All plates were imaged on the same microscope with the same objective, 9 fields of view per well, on 3 different days (3, 5 and 6 October 2026).
-# - The 24h plate used 3 different settings: a longer ER exposure (200 vs 100 ms) and AGP exposure (90 vs 80 ms), and a different Mito focus offset (−7.15 vs −4.3 µm). Time point and these settings cannot be separated, so we compare wells only with the DMSO wells of the same plate.
-# - Each plate took about 228 minutes (36 s per well), row by row: row A from left to right, row B from right to left, and so on. In Cell Painting the cells are fixed before staining, so the imaging time does not change the treatment time; it could only add technical drift. Notebook 01 tests this on the DMSO wells.
-# - The focus height changes smoothly across each plate, like a shallow bowl: the edges are up to about 100 µm higher than the centre (range 173–201 µm), and the 9 fields of view of a well differ by a median of only 2.5 µm. Neither the imaging order nor the focus follows the every-other-row pattern of CL1 at 1h and 4h (notebook 01).
-# 
+# - The same microscope and objective imaged all plates, on 3 different days (3, 5 and 6 October 2026).
+# - The 24h plate used 3 different settings. Its ER exposure was longer (200 vs 100 ms), its AGP exposure was longer (90 vs 80 ms), and its Mito focus offset was different (−7.15 vs −4.3 µm). The data cannot separate time point from these settings. So we compare wells only with the DMSO wells of the same plate.
+# - Each plate took about 228 minutes (36 s per well). The microscope moved row by row: row A from left to right, row B from right to left, and so on.
+# - In Cell Painting, the cells are fixed before staining. So the imaging time does not change the treatment time, but it can add technical drift. Notebook 01 tests this on the DMSO wells, and finds a top-to-bottom drift that follows the rows (= the imaging order).
+# - The focus height changes smoothly across each plate, like a shallow bowl. The edges are up to about 100 µm higher than the centre (range 173–201 µm). The 9 fields of view of a well differ by a median of only 2.5 µm.
+# - Neither the imaging order nor the focus follows the every-other-row pattern of CL1 at 1h and 4h (notebook 01).
+
 # ## 4. Cell counts on the plates
 # 
 # Each square is one well, drawn where it sits on the plate. The black line splits the CL1 half (columns 1–12) from the CL2 half (columns 13–24).
 # 
-# - **Left:** all cells per well relative to the DMSO wells of the same plate and cell line (log2 ratio). This removes the growth difference between the cell lines and plates, so only differences inside a plate remain. Small dots mark treated wells.
+# - **Left:** all cells per well, relative to the DMSO wells of the same plate and cell line (log2 ratio). This removes the growth difference between the cell lines and plates, so only differences inside a plate remain. Small dots mark treated wells.
 # - **Right:** the share of cells in the well that pass QC.
+# 
+# The table below the maps splits the cells that fail QC into image QC and profile QC failures.
 
 # In[10]:
 
@@ -586,14 +612,23 @@ qc_summary.select("time_point", "cell_line", "pct_pass", "pct_fail_image", "pct_
 # **Result:**
 # 
 # - The 1h and 4h plates are even, with no clear patches.
-# - On the 24h plate, CL1 has a block of low-count wells in columns 3–4 (rows F–N) and along rows M–N, down to about a third of the DMSO median. The 4 wells that fail well QC (black frames) are all in this area. CL2 is also lower in rows M–N, but less so. DMSO and treated wells in these areas are both low, so this points to seeding or handling, not to the treatments.
-# - CL1 loses more cells to QC than CL2 on every plate (73–79% pass vs 87–89%), mostly to profile QC (19–23% vs 11%). Image QC matters only for CL1 at 24h (5.4% of cells) and hits the same low-count area, where single wells keep as little as 3% of their cells.
-# 
+# - On the 24h plate, CL1 has a block of low-count wells in columns 3–4 (rows F–N) and along rows M–N. These wells drop to about a third of the DMSO median. The 4 wells that fail well QC (black frames) all sit in this area.
+# - CL2 at 24h is also lower in rows M–N, but less so.
+# - DMSO wells and treated wells in these areas are both low. So the cause is seeding or handling, not the treatments.
+# - CL1 loses more cells to QC than CL2 on every plate (73–79% pass vs 87–89%). Most of these cells fail profile QC (19–23% vs 11%).
+# - Image QC matters only for CL1 at 24h (5.4% of cells). It hits the same low-count area, where single wells keep as little as 3% of their cells.
+
 # ## 5. DMSO control wells
 # 
-# The DMSO wells show how much cell number varies without any treatment. We look at the spread (CV = standard deviation / mean, in %), and at whether wells at the plate edge or in certain rows or columns have fewer cells.
+# The DMSO wells show how much the cell number varies without any treatment. We look at three things:
 # 
-# **Pass if:** DMSO wells of one plate and cell line have a CV below about 15%, and no strong edge or row/column pattern.
+# - **5a:** the spread of the DMSO wells (CV = standard deviation / mean, in %) and the growth from 1h to 24h.
+# - **5b:** why some CL1 DMSO wells at 24h keep so few QC-passing cells.
+# - **5c:** whether wells at the plate edge, or in certain rows or columns, have fewer cells.
+# 
+# **Pass if:** the DMSO wells of one plate and cell line have a CV below about 15%, and no strong edge or row/column pattern.
+# 
+# ### 5a. Spread and growth
 
 # In[12]:
 
@@ -651,6 +686,19 @@ for ax, (col, title) in zip(axes, [("n_cells_all", "All cells"), ("n_cells_qc", 
 axes[1].legend(handles=[Patch(color=line_colors[l], label=l) for l in line_order], title="cell line", loc="upper left")
 save_fig(fig, "05_dmso_cell-count-distribution")
 
+
+# **Result of 5a:**
+# 
+# - CL1 does not grow. The DMSO median is 2,300 (1h), 2,356 (4h) and 2,085 (24h) cells per well (0.91× from 1h to 24h). CL2 grows from 1,840 to 2,187 to 3,605 cells (1.96×).
+# - The spread passes on the 1h and 4h plates (CV 7–13%) and for CL2 at 24h (11%).
+# - The spread fails for CL1 at 24h: CV 25% for all cells and 40% for QC-passing cells. 8 DMSO wells hold fewer than half the median. Two of its DMSO wells (L04, N10) have fewer than 100 QC-passing cells and fail well QC.
+
+# ### 5b. Why do some CL1 DMSO wells at 24h keep so few QC-passing cells?
+# 
+# In the right panel above, some CL1 DMSO wells at 24h keep almost no QC-passing cells. The images below show the 4 CL1 DMSO wells at 24h with the fewest QC-passing cells. For each well, we show the field of view that lost the most cells.
+# 
+# - **Top:** the DNA stain. A cyan outline marks a cell that passes QC, and a red outline marks a cell that QC removes.
+# - **Bottom:** the Mito stain of the same field. Yellow marks pixels at the camera's maximum. Image QC fails a field when more than 1% of the pixels of a channel are at the maximum.
 
 # In[15]:
 
@@ -713,6 +761,12 @@ fig.suptitle("CL1 DMSO wells at 24h with the fewest QC-passing cells: one field 
 save_fig(fig, "06_dmso_low-count-example-images")
 
 
+# **Result of 5b:** these wells hold about 1,100–1,500 cells, close to a normal count. QC removes most of them because their fields of view fail image QC: 1.2–3.5% of the Mito pixels are at the camera's maximum. Dense clumps of CL1 cells make the Mito image too bright. So the low QC-passing counts in these wells come from over-exposure, not from missing cells.
+
+# ### 5c. Position effects
+# 
+# We compare the DMSO wells on the outer ring of the plate (row A or P, column 1 or 24) with the inner DMSO wells. We also list the row and the column with the lowest median count on each plate.
+
 # In[16]:
 
 
@@ -755,27 +809,35 @@ for name, index, label in [
 pl.concat(lowest).sort(pl.col("time_point").cast(pl.Enum(plate_order)), "cell_line", "lowest")
 
 
-# **Result:**
+# **Result of 5c:**
 # 
-# - CL1 does not grow: DMSO median 2,300 (1h), 2,356 (4h) and 2,085 (24h) cells per well (0.91× from 1h to 24h). CL2 grows from 1,840 to 2,187 to 3,605 (1.96×).
-# - The spread passes on the 1h and 4h plates (CV 7–13%) and for CL2 at 24h (11%), but not for CL1 at 24h: CV 25% for all cells, 40% for QC-passing cells, and 8 DMSO wells below half the median. Two of its DMSO wells (L04, N10) have under 100 QC-passing cells and fail well QC.
-# - CL1 at 24h: DMSO wells in row N have 54% and in column 4 have 56% of the median count. Here edge wells have *more* cells than inner wells (123% vs 92%, p < 0.001), because the low area is inside the plate. This is not a classic edge effect.
-# - Elsewhere the position effects are small: CL2 edge wells at 1h and 4h have slightly fewer cells (95% vs 101%, p ≤ 0.001). Except for the 24h plate (CL2 row M: 79%), no row or column falls below 83% of the median.
-# 
+# - CL1 at 24h: DMSO wells in row N have 54% of the median count, and DMSO wells in column 4 have 56%.
+# - On this plate, edge wells have *more* cells than inner wells (123% vs 92%, p < 0.001), because the low-count area lies inside the plate. So this is not a classic edge effect.
+# - Elsewhere, the position effects are small. CL2 edge wells at 1h and 4h have slightly fewer cells (95% vs 101%, p ≤ 0.001).
+# - Apart from the 24h plate (CL2 row M: 79%), no row or column falls below 83% of the median.
+
 # ## Summary
 # 
-# **Data:** the layout files, the imaging records of the 3 plates, and 1,140 wells (3 plates × 2 cell lines × 190 wells; 127 DMSO wells per cell line per plate) with 2.65 million cells, of which 82.5% pass QC. 4 wells (all CL1, 24h plate) fail well QC because they have fewer than 100 QC-passing cells.
+# **Data:** the layout files, the imaging records of the 3 plates, and 1,140 wells (3 plates × 2 cell lines × 190 wells, with 127 DMSO wells per cell line per plate). The wells hold 2.65 million cells, and 82.5% of them pass QC. 4 wells (all CL1, 24h plate) fail well QC, because they have fewer than 100 QC-passing cells.
 # 
-# **What we did:** drew the plate layout and checked it against the profiles; compared the imaging settings, imaging order and focus of the 3 plates; mapped cell counts and QC pass rates per well on each plate; and measured the spread and position effects of cell number in DMSO wells.
+# **What we did:**
+# 
+# 1. We drew the plate layout and checked it against the profiles.
+# 2. We compared the imaging settings, imaging order and focus of the 3 plates.
+# 3. We mapped the cell counts and QC pass rates of every well.
+# 4. We measured the spread and the position effects of cell number in the DMSO wells.
 # 
 # **Findings:**
-# - One layout on all 3 plates; CL2 repeats CL1 12 columns to the right. Per cell line and plate: 127 DMSO wells and 21 treatments × 3 wells, spread over the plate. The layout files agree with the profiles in every well.
-# - The 24h plate was imaged with a longer ER (200 vs 100 ms) and AGP (90 vs 80 ms) exposure and a different Mito focus offset. Each plate took about 3.8 hours to image, row by row; the focus height changes smoothly.
-# - CL2 doubles from 1h to 24h (1,840 → 3,605 cells per DMSO well); CL1 does not grow (2,300 → 2,085).
-# - The 1h and 4h plates are even (DMSO CV 7–13%). On the 24h plate, CL1 has a low-count area (columns 3–4 rows F–N, rows M–N; row N at 54% of the median), with DMSO CV 25%. This area also has the lowest share of cells passing QC and all 4 wells that fail well QC.
+# 
+# - All 3 plates use one layout, and CL2 repeats CL1 12 columns to the right. Per cell line and plate, there are 127 DMSO wells and 21 treatments × 3 wells, spread over the plate. The layout files agree with the profiles in every well.
+# - The 24h plate used a longer ER exposure (200 vs 100 ms), a longer AGP exposure (90 vs 80 ms) and a different Mito focus offset. Each plate took about 3.8 hours to image, row by row. The focus height changes smoothly.
+# - CL2 doubles from 1h to 24h (1,840 → 3,605 cells per DMSO well). CL1 does not grow (2,300 → 2,085).
+# - The 1h and 4h plates are even (DMSO CV 7–13%). On the 24h plate, CL1 has a low-count area (columns 3–4 rows F–N, and rows M–N), with row N at 54% of the median and a DMSO CV of 25%.
+# - This area also has the lowest share of cells that pass QC, and all 4 wells that fail well QC. In its emptiest DMSO wells, most cells sit in images that fail image QC because the Mito channel is over-exposed.
 # 
 # **Caveats:**
-# - Cell line and plate half cannot be separated (CL1 always in columns 1–12), and time point and exposure cannot be separated (24h plate imaged with longer ER/AGP exposures). All comparisons are therefore made within one plate and one cell line.
-# - Doses are stock concentrations; final well concentrations are unknown.
 # 
-# **Next:** notebook 01 tests how cell number and plate position change the profiles; notebook 04 tests which treatments lower cell number.
+# - The data cannot separate cell line from plate half (CL1 always in columns 1–12). They also cannot separate time point from exposure (the 24h plate used longer ER and AGP exposures). So all comparisons stay within one plate and one cell line.
+# - Doses are stock concentrations. The final well concentrations are unknown.
+# 
+# **Next:** notebook 01 tests how cell number and plate position change the profiles. Notebook 04 tests which treatments lower cell number.

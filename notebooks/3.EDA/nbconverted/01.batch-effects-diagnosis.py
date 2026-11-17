@@ -3,26 +3,27 @@
 
 # # Batch effect diagnosis
 # 
-# **Question:** what drives the differences between the profiles: biology (cell line, time point, treatment), or technical effects (where a well sits on the plate, how many cells it holds, when it was imaged)?
+# **Question:** what drives the differences between the profiles? Is it biology (cell line, time point, treatment), or a technical effect (plate position, cell number, imaging time)?
 # 
-# A **batch effect** is a difference in the profiles that comes from *how* the wells were handled or measured, not from the biology. For example, if every other row of a plate received a little less medium, the DMSO wells in those rows would look different from the other DMSO wells, and a treatment placed in those rows would look "active" only because of where it sits.
+# A **batch effect** is a difference in the profiles that comes from *how* the wells were handled or measured, not from the biology. For example, assume that every other row of a plate received a little less medium. Then the DMSO wells in those rows look different from the other DMSO wells. A treatment in those rows then looks "active" only because of where it sits.
 # 
-# Each plate is one time point and one **batch**, and the 3 replicate wells of a treatment always sit on the same plate. Treated wells can differ because of their treatment, so **we assess batch effects only on the DMSO wells**: they all got the same treatment, so within one plate and cell line they should look alike, and any pattern among them is technical. The treated wells appear only in the biology overview (sections 4 and 5).
+# Each plate is one time point and one **batch**. The 3 replicate wells of a treatment always sit on the same plate. Treated wells can differ because of their treatment, so **we assess batch effects only on the DMSO wells**. All DMSO wells got the same treatment. Within one plate and cell line they should look alike, so any pattern among them is technical. The treated wells appear only in the biology overview (sections 4 and 5).
 # 
-# - **H0:** the DMSO wells of a plate and cell line differ only at random; no technical factor explains the differences.
+# - **H0:** the DMSO wells of a plate and cell line differ only at random. No technical factor explains the differences.
 # - **H1:** a technical factor (plate position, cell number, imaging order) makes some DMSO wells differ more than others.
 # 
-# What we do:
+# The notebook has two parts:
 # 
-# 1. **UMAP maps** of single cells and wells, to see what separates the profiles (biology overview).
-# 2. **UMAP of the DMSO wells only**, coloured by plate and by each technical factor.
-# 3. **Distance from DMSO**: how far each DMSO well lies from the typical DMSO well of its plate and cell line, drawn on the plate.
-# 4. **Tests in DMSO wells**: does this distance follow plate area, cell number, distance to the plate edge, or imaging time?
-# 5. **Features that follow cell number** in DMSO wells.
+# 1. **Biology overview (sections 3–5):** UMAP maps of single cells and of all wells.
+# 2. **Batch effects in the DMSO wells (sections 6–9):**
+#    - a UMAP of the DMSO wells only, colored by plate and by each technical factor (section 6).
+#    - the distance of each DMSO well from the typical DMSO well, drawn on the plate (section 7).
+#    - tests of each technical factor against this distance, and a test for gradients across the plate (section 8).
+#    - the share of features that follow cell number (section 9).
 # 
 # ## Setup
 # 
-# Run with `_run.sbatch` (about 10 minutes, 30 GB of memory).
+# Run with `_run.sbatch` (about 5 minutes, 30 GB of memory).
 
 # In[1]:
 
@@ -119,7 +120,7 @@ def save_fig(fig, name):
 
 # ## 1. Load the profiles
 # 
-# Wells that fail well QC (fewer than 100 QC-passing cells, see `2.preprocessing`) are left out, with their cells. Single cells with a missing value are dropped, because PCA cannot use them.
+# We leave out the wells that fail well QC (fewer than 100 QC-passing cells, see `2.preprocessing`), together with their cells. We also drop single cells with a missing value, because PCA cannot use them.
 # 
 # **Pass if:** the well profiles have no missing values.
 
@@ -146,16 +147,20 @@ print(f"kept: {agg_profiles.n_obs:,} wells, {sc_profiles.n_obs:,} cells")
 failed_wells
 
 
-# **Result: PASS.** 2,185,564 cells and 1,140 wells, with 1,399 features. 5,404 cells (0.25%) have a missing value and are dropped; the well profiles have none. 4 wells fail well QC (24h plate, CL1, 39–89 QC-passing cells) and are left out with their cells: 1,136 wells and 2,179,895 cells remain.
+# **Result: PASS.**
 # 
+# - The data hold 2,185,564 cells and 1,140 wells, with 1,399 features.
+# - 5,404 cells (0.25%) have a missing value, and we drop them. The well profiles have no missing values.
+# - 4 wells fail well QC (24h plate, CL1, 39–89 QC-passing cells). We leave them out with their cells, so 1,136 wells and 2,179,895 cells remain.
+
 # ## 2. Add the technical factors to each well
 # 
-# For each well we add:
+# For each well, we add four technical factors:
 # 
-# - **cell number relative to DMSO:** log2(all cells in the well / median of the DMSO wells of the same plate and cell line). 0 = like DMSO, −1 = half as many cells. We count all cells, before QC, because crowding depends on every cell in the well.
-# - **plate area:** whether the well sits in the odd rows of columns 1–6 (CL1 half), the area the plate map of section 7 points to;
-# - **wells to the plate edge:** 0 for the outer ring, up to 7 in the centre;
-# - **imaging time:** minutes after the first well of the plate was imaged.
+# - **cell number relative to DMSO:** log2(all cells in the well / median of the DMSO wells of the same plate and cell line). 0 = like DMSO, −1 = half as many cells. We count all cells before QC, because crowding depends on every cell in the well.
+# - **plate area:** whether the well sits in the odd rows of columns 1–6 (CL1 half). The plate map of section 7 points to this area.
+# - **wells to the plate edge:** 0 for the outer ring, up to 7 in the centre.
+# - **imaging time:** minutes after the microscope imaged the first well of the plate.
 
 # In[4]:
 
@@ -204,12 +209,16 @@ wells.group_by("time_point", "cell_line").agg(
 
 # ## 3. PCA and UMAP
 # 
-# A **UMAP** places similar profiles close together on a 2D map. We make two:
+# A **UMAP** places similar profiles close together on a 2D map. We make two maps:
 # 
-# - **Single cells:** a random sample of 100 cells per well, so every well counts equally (2 million cells would take hours and cover each other on the plot).
-# - **Wells:** the well profiles (median of each well's QC-passing cells). Averaging removes the variation between single cells, so differences between wells show more clearly.
+# - **Single cells:** a random sample of 100 cells per well, so every well counts equally. All 2 million cells would take hours, and the dots would cover each other.
+# - **Wells:** the well profiles (median of the QC-passing cells of each well). The median removes the variation between single cells, so differences between wells show more clearly.
 # 
-# Steps: clip values beyond ±20 MADs, keep the principal components that explain 95% of the variance (PCA), connect each profile to its 15 nearest neighbors, and draw the map.
+# The steps are:
+# 
+# 1. Clip values beyond ±20 MADs.
+# 2. Keep the principal components that explain 95% of the variance (PCA).
+# 3. Connect each profile to its 15 nearest neighbors, and draw the map.
 
 # In[5]:
 
@@ -235,8 +244,11 @@ embed(sc_sample, "single cells")
 embed(agg_profiles, "wells")
 
 
-# **Result:** 0.078% of the single-cell values and 0.003% of the well values are clipped. Single cells need 397 principal components to explain 95% of the variance, wells only 16: taking the median of each well removes most of the variation between single cells.
+# **Result:**
 # 
+# - 0.078% of the single-cell values and 0.003% of the well values are clipped.
+# - Single cells need 397 principal components to explain 95% of the variance. Wells need only 16, because the median of each well removes most of the variation between single cells.
+
 # ## 4. What separates the single cells?
 # 
 # Each dot is one cell.
@@ -281,11 +293,11 @@ fig.suptitle(f"Single cells ({sc_sample.n_obs:,} cells, {cells_per_well} per wel
 save_fig(fig, "01_umap_single-cells")
 
 
-# **Result:** cells group first by cell line, then by time point: cells at 24h separate from cells at 1h and 4h, which overlap. Control, compound and ligand cells mix everywhere, so treatment effects are small next to the differences between single cells.
-# 
+# **Result:** cells group first by cell line, then by time point. Cells at 24h separate from cells at 1h and 4h, which overlap. Control, compound and ligand cells mix everywhere. So the treatment effects are small next to the differences between single cells.
+
 # ## 5. What separates the wells?
 # 
-# Each dot is one well, DMSO and treated. This map shows the biology (cell line, time point, treatment); section 6 looks at the technical factors on the DMSO wells alone.
+# Each dot is one well, DMSO or treated. This map shows the biology (cell line, time point, treatment). Section 6 looks at the technical factors, on the DMSO wells only.
 
 # In[7]:
 
@@ -310,12 +322,12 @@ save_fig(fig, "02_umap_wells")
 # **Result:**
 # 
 # - Each cell line is normalized to its own DMSO wells, so the two lines overlap in most of the map. The 24h wells spread into arms (b).
-# - CBK600005 forms its own groups at the edge of the map (c); TGFβ1 and the other treatments mostly mix with DMSO.
-# - A separate island sits at the top left. It holds DMSO and treated wells alike, so it is not a treatment effect; section 6 shows what it is.
-# 
+# - CBK600005 forms its own groups at the edge of the map (c). TGFβ1 and the other treatments mostly mix with DMSO.
+# - A separate island sits at the top left. It holds DMSO wells and treated wells, so it is not a treatment effect. Section 6 shows what it is.
+
 # ## 6. Batch effects: UMAP of the DMSO wells
 # 
-# From here on we use **only the DMSO wells**. We repeat the PCA (95% of the variance) and the UMAP on the DMSO wells alone, so the map is not shaped by treatment effects, and color it by the batch (plate), the cell line, and each technical factor of section 2. In panel c, the DMSO wells in the odd rows of columns 1–6 (CL1) are colored by plate; all other DMSO wells are grey.
+# From here on, we use **only the DMSO wells**. We repeat the PCA (95% of the variance) and the UMAP on the DMSO wells alone, so treatment effects cannot shape the map. Then we color the map by the batch (plate), the cell line, and each technical factor of section 2. In panel c, the DMSO wells in the odd rows of columns 1–6 (CL1) are colored by plate. All other DMSO wells are grey.
 # 
 # **Pass if:** the DMSO wells of each plate and cell line form one even cloud, with no group that follows a technical factor.
 
@@ -364,19 +376,23 @@ dmso.group_by("time_point", "cell_line", "shifted_area").agg(
 ).sort(pl.col("time_point").cast(pl.Enum(plate_order)), "cell_line", "shifted_area")
 
 
-# **Result: FAIL: the DMSO wells form groups that follow technical factors.**
+# **Result: FAIL. The DMSO wells form groups that follow technical factors.**
 # 
-# - **Plate (a).** The DMSO wells of the 3 plates mix: each plate was normalized to its own DMSO cells, so there is no overall shift between the batches.
-# - **Plate area (c).** The CL1 DMSO wells in the odd rows of columns 1–6 at 1h form their own island (right): they lie 2.9 times further from the centre of the map than the other CL1 DMSO wells of that plate (median 11.9 vs 4.1 UMAP units). At 4h and 24h the same wells sit at the edge of the main cloud (6.5 vs 3.8, and 6.7 vs 4.4).
+# - **Plate (a).** The DMSO wells of the 3 plates mix. Each plate was normalized to its own DMSO cells, so the batches show no overall shift.
+# - **Plate area (c).** The CL1 DMSO wells in the odd rows of columns 1–6 at 1h form their own island (right). They lie 2.9 times further from the map centre than the other CL1 DMSO wells of that plate. The medians are 11.9 vs 4.1 UMAP units. At 4h and 24h, the same wells sit at the edge of the main cloud (6.5 vs 3.8, and 6.7 vs 4.4).
 # - **Cell number (d).** The small groups at the top left are 24h DMSO wells with few cells (blue).
-# - **Imaging time (f).** Imaging time runs as a smooth gradient across the main cloud, from early (light) to late (dark) rows. Section 8b tests this gradient.
-# - **Cell line (b).** The two cell lines still separate partly, as expected, because they differ in biology even after each was normalized to its own DMSO wells.
-# 
+# - **Imaging time (f).** Imaging time runs as a smooth gradient across the main cloud, from early rows (light) to late rows (dark). Section 8b tests this gradient.
+# - **Cell line (b).** The two cell lines still separate partly, as expected. They differ in biology, even after we normalized each line to its own DMSO wells.
+
 # ## 7. Where on the plate do the DMSO wells differ?
 # 
-# The UMAP distorts distances, so from here on we measure them directly. For each plate and cell line, we rescale every feature to the spread between its DMSO wells (subtract the median DMSO well, divide by 1.4826 × MAD of the DMSO wells), so a value of 3 means "3 times the normal well-to-well variation of DMSO". The **distance from DMSO** of a well is the Euclidean length of its rescaled profile: 0 is the typical DMSO well. The same distance is used in notebook 03.
+# The UMAP distorts distances, so from here on we measure distances directly.
 # 
-# A DMSO well is **unusual** when its distance is above the median + 3 MAD of the DMSO wells of its plate and cell line. The maps show only the DMSO wells; treated wells are grey.
+# 1. **Rescale.** For each plate and cell line, we rescale every feature to the spread between its DMSO wells. We subtract the median DMSO well, and divide by 1.4826 × MAD of the DMSO wells. A value of 3 then means "3 times the normal well-to-well variation of DMSO".
+# 2. **Distance from DMSO.** The distance of a well is the Euclidean length of its rescaled profile. 0 is the typical DMSO well. Notebook 03 uses the same distance.
+# 3. **Unusual DMSO well.** A DMSO well is unusual when its distance is above the median + 3 MAD of the DMSO wells of its plate and cell line.
+# 
+# The maps show only the DMSO wells. Treated wells are grey.
 
 # In[10]:
 
@@ -461,15 +477,15 @@ fig.legend(
 save_fig(fig, "03_plate-maps_dmso-distance")
 
 
-# **Result:** 
+# **Result:**
 # 
-# - **CL1 at 1h:** 33 of 127 DMSO wells are unusual, and all 33 lie in the odd rows of columns 1–6: the map shows stripes in every other row of the left part of the plate. Their cell number is close to normal (median 2,206 vs 2,375 cells), so this is not a density effect. At 4h the same pattern is weaker: 11 unusual wells, all in the same area.
-# - **24h:** the unusual DMSO wells follow the low-count areas of notebook 02: columns 3–4 and rows M–N in CL1 (19 wells; median 1,110 vs 2,179 cells), and rows L–N in CL2 (22 wells; median 3,070 vs 3,651 cells).
-# - **CL2 at 1h and 4h** is nearly clean: 2 and 7 unusual wells, at 4h mostly at the right edge (columns 23–24).
-# 
+# - **CL1 at 1h:** 33 of 127 DMSO wells are unusual, and all 33 lie in the odd rows of columns 1–6. The map shows stripes in every other row of the left part of the plate. Their cell number is close to normal (median 2,206 vs 2,375 cells), so this is not a density effect. At 4h, the same pattern is weaker: 11 unusual wells, all in the same area.
+# - **24h:** the unusual DMSO wells follow the low-count areas of notebook 02. In CL1 they sit in columns 3–4 and rows M–N (19 wells, median 1,110 vs 2,179 cells). In CL2 they sit in rows L–N (22 wells, median 3,070 vs 3,651 cells).
+# - **CL2 at 1h and 4h** is nearly clean: 2 and 7 unusual wells. At 4h, most of them sit at the right edge (columns 23–24).
+
 # ## 8. Which technical factors explain the DMSO differences?
 # 
-# We test each factor on the DMSO wells of each plate and cell line, with rank (Spearman) correlations from −1 to 1:
+# We test each factor on the DMSO wells of each plate and cell line. For three factors, we use rank (Spearman) correlations with the distance from DMSO, from −1 to 1:
 # 
 # | Factor | Measure | A technical effect looks like |
 # |---|---|---|
@@ -478,7 +494,7 @@ save_fig(fig, "03_plate-maps_dmso-distance")
 # | Imaging order | minutes after the first well | positive rho (drift) |
 # | Plate area (CL1 only) | odd rows of columns 1–6 vs the other CL1 DMSO wells | larger distance in the area (Mann–Whitney test) |
 # 
-# Section 8b adds a test for smooth gradients across the plate, which this distance test can miss.
+# This distance test can miss a smooth gradient across the plate. Section 8b adds a test for gradients.
 # 
 # **Pass if:** every correlation stays close to 0 (|rho| below about 0.3), and the plate area does not differ.
 
@@ -536,11 +552,26 @@ fig.suptitle("DMSO wells: distance from the typical DMSO well vs cell number (rh
 save_fig(fig, "04_dmso_distance-vs-cell-number")
 
 
+# **Result of the distance test: H0 rejected for plate area and cell number. The plate edge and the imaging order do not change the distance (section 8b finds a row gradient).**
+# 
+# - **Plate area:** in CL1, the DMSO wells in the odd rows of columns 1–6 lie further from the typical DMSO well than the other CL1 DMSO wells. They lie 3.7 times further at 1h (Mann–Whitney p = 2 × 10⁻¹⁷) and 1.9 times further at 4h (p = 6 × 10⁻¹⁵). At 24h the ratio is 1.4 (p = 0.0003). But this area overlaps the low-count block in columns 3–4, so the cause at 24h is not clear.
+# - A pattern in every other row points to liquid handling (for example one channel of a multichannel dispenser), not to biology. The records do not show which step caused it.
+# - **Cell number:** DMSO wells whose cell number is further from the median differ more, on every plate. rho is 0.30–0.32 at 1h, 0.51–0.57 at 4h and 0.60–0.66 at 24h. The scatter plots have a V shape: wells with fewer cells and wells with more cells both differ. At 24h, all DMSO wells far beyond the limit have fewer cells.
+# - **Plate edge:** rho is −0.26 to 0.02, except for CL1 at 24h (−0.37). On that plate, the low-count block lies inside the plate, so edge wells have more cells (notebook 02). This is the cell number effect, not an edge effect.
+# - **Imaging order:** rho is −0.15 to −0.04 at 1h and 4h. So DMSO wells imaged later are not *further* from the typical DMSO well. At 24h, rho is 0.28 (CL1) and 0.41 (CL2), but the rows imaged last (M–N) are also the low-count rows.
+# - A gradient can move wells in one direction at the top of the plate and in the other direction at the bottom. This test cannot find such a gradient. Section 8b tests for it.
+
 # ### 8b. Gradients across the plate
 # 
-# The distance test above only catches DMSO wells that sit *far* from the typical DMSO well. A smooth gradient, for example from the top rows to the bottom rows, puts wells on both sides of the centre (top rows on one side, bottom rows on the other), so their distance hardly changes and the test misses it. To catch gradients, we run a PCA on the DMSO wells of each plate and cell line (rescaled profiles) and correlate the top 5 principal components (PCs) with each factor. For each factor we report the PC it follows most (Spearman rho) and the share of the DMSO variation that this PC carries.
+# The distance test above only finds DMSO wells that sit *far* from the typical DMSO well. A smooth gradient puts wells on both sides of the centre. For example, the top rows move to one side and the bottom rows to the other side. Their distance hardly changes, so the distance test misses the gradient.
 # 
-# The plate was imaged row by row, so the row and the imaging time are one factor here; they cannot be separated.
+# To find gradients, we use the main directions in which the DMSO wells differ:
+# 
+# 1. For each plate and cell line, we run a PCA on the rescaled DMSO wells, and keep the top 5 principal components (PCs).
+# 2. We correlate each factor with each PC (Spearman rho).
+# 3. For each factor, we report the PC that it follows most, and the share of the DMSO variation that this PC carries.
+# 
+# The microscope imaged the plate row by row, so the row and the imaging time are one factor here. The data cannot separate them.
 # 
 # **Pass if:** no factor follows a PC with |rho| ≥ 0.5.
 
@@ -589,25 +620,17 @@ ax.set_title("DMSO wells: strongest link of each factor with the top 5 PCs\n(rho
 save_fig(fig, "04b_dmso_gradients")
 
 
-# **Result (distance test):** **plate area and cell number: H0 rejected. Plate edge and imaging order: no effect on the distance, but section 8b finds a gradient with the row (= imaging order).**
+# **Result of 8b: H0 rejected for cell number and for the row (= imaging order). The edge and the column have weaker links.**
 # 
-# - **Plate area:** in CL1, DMSO wells in the odd rows of columns 1–6 lie 3.7 times (1h, Mann–Whitney p = 2 × 10⁻¹⁷) and 1.9 times (4h, p = 6 × 10⁻¹⁵) further from the typical DMSO well than the other CL1 DMSO wells. At 24h the ratio is 1.4 (p = 0.0003), but this area overlaps the low-count block in columns 3–4, so the cause there is not clear. A pattern in every other row points to liquid handling (for example one channel of a multichannel dispenser), not to biology; the records do not show which step caused it.
-# - **Cell number:** DMSO wells whose cell number is further from the median differ more, on every plate: rho 0.30–0.32 at 1h, 0.51–0.57 at 4h and 0.60–0.66 at 24h. The scatter plots have a V shape: wells with fewer and with more cells both differ. At 24h, all DMSO wells far beyond the limit have fewer cells.
-# - **Plate edge:** rho −0.26 to 0.02, except CL1 at 24h (−0.37), where the low-count block lies inside the plate, so edge wells have more cells (notebook 02). This is the cell number effect, not an edge effect.
-# - **Imaging order:** rho −0.15 to −0.04 at 1h and 4h: DMSO wells imaged later are not *further* from the typical DMSO well. At 24h, rho is 0.28 (CL1) and 0.41 (CL2), but the rows imaged last (M–N) are also the low-count rows. This test cannot see a gradient that moves wells in one direction at the top of the plate and the other direction at the bottom; section 8b does.
-# 
-# ### Result of 8b: gradients
-# 
-# **H0 rejected for cell number and for the row (= imaging order); weaker links with the edge and the column.**
-# 
-# - **Cell number** is the strongest gradient: it follows a large PC in every panel (|rho| 0.68–0.91; the PC carries 12–51% of the DMSO variation). In 4 of the 6 panels it is PC1 or PC2.
-# - **Row (= imaging order)** follows a PC in every panel. In CL2 it is a medium one (|rho| 0.58–0.74, PC2, 13–19% of the variation); in CL1 a small one (|rho| 0.48–0.72, PC4, 3–5%). So the DMSO profiles drift from the top rows to the bottom rows of the plate. Because the plate was imaged row by row, this can be a position effect (for example liquid handling or temperature across the plate) or a drift during the 3.8 hours of imaging; the data cannot tell the two apart.
-# - **Edge and column:** most of their strong links share a PC with cell number or with the odd-row area (CL1 at 1h: PC1, 69% of the variation, is the shifted area). On their own they follow only small PCs (3–10% of the variation; for example the edge in CL2 at 4h, rho −0.74 with PC3, 10%).
-# - The UMAP of section 6 shows the same: the imaging-time gradient in panel f, the low-count wells in panel d.
-# 
+# - **Cell number** is the strongest gradient. It follows a large PC in every panel (|rho| 0.68–0.91, and the PC carries 12–51% of the DMSO variation). In 4 of the 6 panels, it is PC1 or PC2.
+# - **Row (= imaging order)** follows a PC in every panel. In CL2 it is a medium PC (|rho| 0.58–0.74, PC2, 13–19% of the variation). In CL1 it is a small PC (|rho| 0.48–0.72, PC4, 3–5%). So the DMSO profiles drift from the top rows to the bottom rows of the plate.
+# - The microscope imaged the plate row by row. So the drift can be a position effect or a drift during the 3.8 hours of imaging. A position effect can come from liquid handling or temperature across the plate, for example. The data cannot tell the two apart.
+# - **Edge and column:** most of their strong links share a PC with cell number or with the odd-row area. For example, in CL1 at 1h, PC1 (69% of the variation) is the shifted area. On their own, the edge and the column follow only small PCs (3–10% of the variation). For example, the edge in CL2 at 4h has rho −0.74 with PC3 (10%).
+# - The UMAP of section 6 shows the same patterns: the imaging-time gradient in panel f, and the low-count wells in panel d.
+
 # ## 9. How many features follow cell number?
 # 
-# For each plate and cell line, we compute the Spearman correlation of every feature with the cell number (log2 ratio) across the DMSO wells. A feature **follows cell number** when |rho| ≥ 0.5. Without any treatment, such a link can only come from density, or from what caused the density difference (seeding, handling).
+# For each plate and cell line, we compute the Spearman correlation of every feature with the cell number (log2 ratio) across the DMSO wells. A feature **follows cell number** when |rho| ≥ 0.5. Without any treatment, such a link can only come from density, or from the cause of the density difference (seeding, handling).
 # 
 # **Pass if:** under about 10% of features follow cell number.
 
@@ -662,16 +685,16 @@ ax.set_title("Features that follow cell number in DMSO wells\n(feature type, num
 save_fig(fig, "05_dmso_features-following-cell-number")
 
 
-# **Result:** **FAIL on every plate.**
+# **Result: FAIL on every plate.**
 # 
 # - 23–59% of the 1,399 features follow cell number in DMSO wells (pass: below 10%). The share is highest for CL1 at 24h (59%), where cell numbers vary most, and for CL2 at 4h (51%).
-# - Neighbor features (how crowded a cell is) follow cell number most (38–88% of 8 features), then texture, intensity and correlation features; cell and nucleus shape (AreaShape) least (0–18%).
+# - Neighbor features (how crowded a cell is) follow cell number most (38–88% of 8 features). Texture, intensity and correlation features come next. Cell and nucleus shape (AreaShape) follow it least (0–18%).
 # - The top features reach |rho| 0.85–0.96, for example `Nuclei_Texture_InfoMeas2_CorrER_5_00_256` and `Cells_Correlation_RWC_CorrDNA_CorrER`.
-# - So a treatment that changes cell number will also change many features through density alone. Notebook 04 checks this for the treatments that lower cell number.
-# 
+# - So a treatment that changes the cell number also changes many features through density alone. Notebook 04 checks this for the treatments that lower the cell number.
+
 # ## 10. Save the results
 # 
-# The UMAP coordinates of the three maps (with metadata) and the distance of every well from DMSO, so other notebooks can use them without running this one.
+# We save the UMAP coordinates of the three maps (with metadata) and the distance of every well from DMSO. Other notebooks can then use them without running this one.
 
 # In[18]:
 
@@ -691,21 +714,26 @@ wells.select(
 
 # ## Summary
 # 
-# **Question:** biology or technical effects: what drives the differences between the profiles?
+# **Question:** what drives the differences between the profiles: biology or technical effects?
 # 
-# **Biology:** cell line and time point drive the largest differences between single cells. Among the treatments, CBK600005 stands apart from DMSO; the others mostly mix with DMSO.
+# **Biology:** cell line and time point drive the largest differences between single cells. Among the treatments, CBK600005 stands apart from DMSO. The other treatments mostly mix with DMSO.
 # 
-# **Batch effects found in the DMSO wells (H0 rejected):**
+# **Batch effects in the DMSO wells (H0 rejected):**
 # 
 # | Batch effect | Where | Evidence | What to do |
 # |---|---|---|---|
-# | **Plate area** | CL1, odd rows of columns 1–6, at 1h (strong) and 4h (weaker) | 33 (1h) and 11 (4h) of 127 DMSO wells are unusual, all in this area; 3.7× and 1.9× further from the typical DMSO well; the wells form their own UMAP island | Flag treated wells in this area (notebook 03 marks them †); check the liquid handling of these rows |
-# | **Cell number** | every plate, strongest at 24h | DMSO distance follows cell number (rho 0.30–0.66); 23–59% of features follow cell number | Compare wells with DMSO wells of similar cell number, or correct for cell number; read the profiles of treatments that lower cell number with care (notebook 04) |
-# | **Low-count areas** | 24h plate: CL1 columns 3–4 and rows M–N; CL2 rows L–N | 19 (CL1) and 22 (CL2) unusual DMSO wells with fewer cells | Seeding or handling problem (notebook 02); the same as the cell number effect |
-# | **Row gradient (= imaging order)** | every plate, clearest in CL2 | a PC of the DMSO wells follows the row (\|rho\| 0.58–0.74, 13–19% of the DMSO variation in CL2; 3–5% in CL1) | Randomize the layout so treatments are not tied to rows; put DMSO wells in every row; consider a row-wise correction |
+# | **Plate area** | CL1, odd rows of columns 1–6, at 1h (strong) and 4h (weaker) | 33 (1h) and 11 (4h) of 127 DMSO wells are unusual, all in this area. They are 3.7× and 1.9× further from the typical DMSO well, and form their own UMAP island. | Flag treated wells in this area (notebook 03 marks them †). Check the liquid handling of these rows. |
+# | **Cell number** | every plate, strongest at 24h | DMSO distance follows cell number (rho 0.30–0.66). 23–59% of features follow cell number. | Compare wells with DMSO wells of similar cell number, or correct for cell number. Read the profiles of treatments that lower cell number with care (notebook 04). |
+# | **Low-count areas** | 24h plate: CL1 columns 3–4 and rows M–N, CL2 rows L–N | 19 (CL1) and 22 (CL2) unusual DMSO wells with fewer cells | A seeding or handling problem (notebook 02). It is part of the cell number effect. |
+# | **Row gradient (= imaging order)** | every plate, clearest in CL2 | A PC of the DMSO wells follows the row: \|rho\| 0.58–0.74 and 13–19% of the DMSO variation in CL2, 3–5% in CL1. | Randomize the layout, so treatments are not tied to rows. Put DMSO wells in every row. Consider a row-wise correction. |
 # 
-# **Weak or not batch effects:** distance to the plate edge and the column have little effect on their own (they follow only small PCs, 3–10% of the DMSO variation, or share a PC with cell number). The plates as a whole do not differ, because each is normalized to its own DMSO cells.
+# **Weak or no batch effects:** the plate edge and the column have little effect on their own. They follow only small PCs (3–10% of the DMSO variation), or they share a PC with cell number. The plates as a whole do not differ, because each plate is normalized to its own DMSO cells.
 # 
-# **Cannot be tested with this design:** time point and imaging settings (the 24h plate used longer ER and AGP exposures) are confounded, and so are cell line and plate half (CL1 always in columns 1–12). All comparisons are therefore made within one plate and cell line.
+# **Not testable with this design:** time point and imaging settings change together (the 24h plate used longer ER and AGP exposures). Cell line and plate half also change together (CL1 always in columns 1–12). So we make all comparisons within one plate and cell line.
 # 
-# **Output:** UMAP coordinates in `results/umap_qced_*.parquet` (single cells, all wells, DMSO wells); the distance from DMSO and technical factors of every well in `results/tables/01.batch-effects-diagnosis/well_distance-and-technical-factors.csv`; the gradient test in `dmso_gradients.csv`; figures in `results/figures/01.batch-effects-diagnosis/`.
+# **Output:**
+# 
+# - UMAP coordinates in `results/umap_qced_*.parquet` (single cells, all wells, DMSO wells).
+# - The distance from DMSO and the technical factors of every well in `results/tables/01.batch-effects-diagnosis/well_distance-and-technical-factors.csv`.
+# - The gradient test in `dmso_gradients.csv`.
+# - Figures in `results/figures/01.batch-effects-diagnosis/`.

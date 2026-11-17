@@ -3,11 +3,17 @@
 
 # # Identify cytotoxic treatments
 # 
-# **Question:** which treatments kill cells or stop their growth, and do their profile changes come from the cell loss?
+# **Question:** which treatments kill cells or stop their growth? And do their profile changes come from the cell loss?
 # 
-# We count the cells in each well from the single-cell profiles and compare every treatment with the DMSO wells of the same plate and cell line. A treatment is **cytotoxic** when its cell count falls more than a set number of robust standard deviations (SD) below DMSO.
+# We count the cells in each well from the single-cell profiles. Then we compare every treatment with the DMSO wells of the same plate and cell line. A treatment is **cytotoxic** when its cell count falls more than 3 robust standard deviations (SD) below DMSO.
 # 
-# Cell number also changes how cells look (notebook 01: 23–59% of features follow cell number in DMSO wells). So, for the treatments that change the cells, we also ask whether their profile change looks like a DMSO well with fewer cells (section 5).
+# Cell number also changes how cells look: in DMSO wells, 23–59% of features follow cell number (notebook 01). So, for the treatments that change the cells, we also ask whether their profile change looks like a DMSO well with fewer cells (section 5).
+# 
+# Sections: 1. count cells per well, 2. set the threshold from the DMSO wells, 3. call cytotoxic treatments, 4. cell loss per treatment, 5. do the profile changes come from the cell loss?
+# 
+# ## Setup
+# 
+# Run notebook 03 first: section 5 reads its activity calls (`treatment_scores.csv`).
 
 # In[1]:
 
@@ -105,9 +111,9 @@ def pretty(perturbation):
 
 # ## 1. Count cells per well
 # 
-# We count every segmented cell per well, before QC: cells that fail QC are still cells in the well. Wells that fail well QC keep their counts too, because a low count is exactly what we look for here.
+# We count every segmented cell per well, before QC, because cells that fail QC are still cells in the well. Wells that fail well QC also keep their counts, because a low count is exactly what we look for here.
 # 
-# **Pass if:** 1,140 wells, each with 9 imaged fields of view.
+# **Pass if:** the data hold 1,140 wells, each with 9 imaged fields of view.
 
 # In[3]:
 
@@ -134,17 +140,22 @@ print(f"wells with a field of view without cells: {(wells['n_sites'] < 9).sum()}
 time_sort(wells.group_by("time_point", "cell_line").agg(wells=pl.len(), dmso_wells=pl.col("is_dmso").sum()))
 
 
-# **Result:** 1,140 wells and 2,647,721 cells; 127 DMSO wells and 21 treatments × 3 wells per plate and cell line. 3 wells have one field of view without cells (24h plate, CL1, inside the low-count area of notebook 02).
+# **Result:**
 # 
+# - The data hold 1,140 wells and 2,647,721 cells. Each plate and cell line has 127 DMSO wells and 21 treatments × 3 wells.
+# - 3 wells have one field of view without cells (24h plate, CL1). They sit inside the low-count area of notebook 02.
+
 # ## 2. Set the threshold from the DMSO wells
 # 
-# For each plate and cell line, we scale every well to the DMSO median (relative cell count) and measure the robust SD of the DMSO wells (1.4826 × MAD). The threshold is the DMSO median minus 3 robust SDs.
+# 1. For each plate and cell line, we scale every well to the DMSO median (relative cell count).
+# 2. We measure the robust SD of the DMSO wells (1.4826 × MAD).
+# 3. The threshold is the DMSO median minus 3 robust SDs.
 # 
-# We use the median of the 3 replicate wells, so one odd well cannot make a call: a median at or below the threshold means at least 2 of the 3 wells are below it.
+# We use the median of the 3 replicate wells, so one odd well cannot make a call. A median at or below the threshold means that at least 2 of the 3 wells are below it.
 # 
-# To check the threshold, we apply the same rule to 100,000 random sets of 3 DMSO wells (negative control). The share that gets called cytotoxic is the false-positive rate per test.
+# **Negative control:** we apply the same rule to 100,000 random sets of 3 DMSO wells. The share of sets that the rule calls cytotoxic is the false-positive rate per test.
 # 
-# **Pass if:** the false-positive rate is below about 1%, so that fewer than 1 of the 126 treatment tests is expected to be a false call.
+# **Pass if:** the false-positive rate is below about 1%. Then we expect fewer than 1 false call among the 126 treatment tests.
 
 # In[4]:
 
@@ -184,15 +195,16 @@ dmso_table.with_columns(pl.selectors.float().round(2))
 
 # **Result: PASS.**
 # 
-# - The robust SD of DMSO is 7–13% on the 1h and 4h plates and for CL2 at 24h, so the threshold lies at 61–78% of DMSO.
-# - CL1 at 24h is much noisier (robust SD 22%), because of the low-count area of the plate. Its threshold is 33% of DMSO, so only a strong cell loss is called there.
-# - At 3 SD the rule calls at most 0.22% of random DMSO sets (0.07 false calls expected in 126 tests). At 2 SD it would call up to 2.7% (about 1.6 false calls expected), so we keep 3 SD.
-# 
+# - The robust SD of DMSO is 7–13% on the 1h and 4h plates and for CL2 at 24h. So the threshold lies at 61–78% of DMSO.
+# - CL1 at 24h is much noisier (robust SD 22%), because of the low-count area of the plate. Its threshold is 33% of DMSO, so the rule calls only a strong cell loss on this plate.
+# - At 3 SD, the rule calls at most 0.22% of random DMSO sets (0.07 false calls expected in 126 tests).
+# - At 2 SD, it would call up to 2.7% (about 1.6 false calls expected). So we keep 3 SD.
+
 # ## 3. Call cytotoxic treatments
 # 
-# For each treatment, plate and cell line we take the median relative cell count and the median z-score of its 3 wells, and call it cytotoxic when the median z-score is at or below −3.
+# For each treatment, plate and cell line, we take the median relative cell count and the median z-score of its 3 wells. We call the treatment cytotoxic when its median z-score is at or below −3.
 # 
-# **Pass if:** the replicate wells of a called treatment agree (all 3 well below DMSO).
+# **Pass if:** the replicate wells of a called treatment agree (all 3 wells well below DMSO).
 
 # In[5]:
 
@@ -223,15 +235,22 @@ print(f"cytotoxic: {calls['cytotoxic'].sum()} of {calls.height} treatment x plat
 calls.filter(pl.col("median_z") <= -2).sort("median_z").drop("n_wells", "treatment").with_columns(pl.col("pct_of_dmso", "median_z").round(2))
 
 
-# **Result:**
+# **Result: PASS.**
 # 
-# - 6 of 126 tests are cytotoxic, all in CL2 at 24h: **CBK600005** (64%, 50%, 51% of DMSO at 0.2, 0.67, 2 mM) and **CBK200566** (71%, 57%, 57%). All 3 wells of each are at least 2.5 SD below DMSO: **pass**.
-# - Nothing is called at 1h or 4h.
-# - CL1 at 24h has near misses that roughly halve the cell count: CBK600005 (33%, 48%, 54%; the 0.2 mM dose just misses at −2.99 SD), TGFβ1 5 and 10 ng/ml (50%, 52%) and CBK175924 0.67 mM (49%, but one of its wells is normal). They do not pass because the DMSO wells of this plate vary so much.
-# 
+# - 6 of 126 tests are cytotoxic, all in CL2 at 24h: **CBK600005** (64%, 50%, 51% of DMSO at 0.2, 0.67, 2 mM) and **CBK200566** (71%, 57%, 57%). All 3 wells of each call are at least 2.5 SD below DMSO.
+# - The rule calls nothing at 1h or 4h.
+# - CL1 at 24h has near misses that roughly halve the cell count:
+#   - CBK600005 (33%, 48%, 54%). The 0.2 mM dose just misses, at −2.99 SD.
+#   - TGFβ1 5 and 10 ng/ml (50%, 52%).
+#   - CBK175924 0.67 mM (49%), but one of its wells is normal.
+# - These near misses do not pass, because the DMSO wells of this plate vary so much.
+
 # ## 4. Cell loss per treatment
 # 
-# Left: the median cell count of the 3 wells (% of DMSO); a black frame marks a cytotoxic call. Right: every well, against the DMSO wells and the threshold of its plate and cell line.
+# Two figures show the cell loss:
+# 
+# 1. **Heatmap:** the median cell count of the 3 wells of each treatment (% of DMSO). A black frame marks a cytotoxic call.
+# 2. **Every well:** each well against the DMSO wells and the threshold of its plate and cell line. Red dots are the wells of a cytotoxic call.
 
 # In[6]:
 
@@ -314,19 +333,22 @@ save_fig(fig, "02_cytotoxicity_replicate-wells")
 
 # **Result:**
 # 
-# - CL2 at 24h: the CBK200566 and CBK600005 wells sit as a group below or near the threshold, so the calls are not driven by one well. One CBK041498 0.67 mM well has only 17% of DMSO cells, but its 2 replicates are normal.
-# - CL1 at 24h: many DMSO wells have only 40–60% of the median, the same range as TGFβ1, CBK175924 and CBK600005. On this plate a cell loss cannot be told apart from the low-count area.
-# 
+# - CL2 at 24h: the CBK200566 and CBK600005 wells sit as a group below or near the threshold, so no single well drives the calls. One CBK041498 0.67 mM well has only 17% of DMSO cells, but its 2 replicates are normal.
+# - CL1 at 24h: many DMSO wells have only 40–60% of the median, the same range as TGFβ1, CBK175924 and CBK600005. So on this plate, a cell loss cannot be told apart from the low-count area.
+
 # ## 5. Do the profile changes come from the cell loss?
 # 
-# In DMSO wells, many features change with cell number (notebook 01). A treatment that lowers cell number can therefore look "active" in part because its wells are less crowded. We test this per plate and cell line:
+# In DMSO wells, many features change with cell number (notebook 01). So a treatment that lowers cell number can look "active" partly because its wells are less crowded. We test this per plate and cell line:
 # 
-# 1. **Density pattern:** from the DMSO wells, we learn how each feature changes when the cell number goes down (the slope of a straight line per feature, on the profiles rescaled to the DMSO well-to-well spread, as in notebooks 01 and 03).
-# 2. **Low-density likeness:** for each treatment, the Spearman correlation across all features between its profile change (median of its wells minus the DMSO median) and the density pattern. +1 = the treatment changes the features in the same order as a DMSO well with fewer cells; 0 = unrelated; negative = like a well with more cells.
+# 1. **Density pattern:** from the DMSO wells, we learn how each feature changes when the cell number goes down. This is the slope of a straight line per feature, on the profiles rescaled to the DMSO well-to-well spread (as in notebooks 01 and 03).
+# 2. **Low-density likeness:** for each treatment, we take its profile change (median of its wells minus the DMSO median). We correlate it with the density pattern across all features (Spearman).
+#    - +1 = the treatment changes the features in the same order as a DMSO well with fewer cells.
+#    - 0 = unrelated.
+#    - negative = like a well with more cells.
 # 
-# We compare patterns, not sizes, because a straight line learned from DMSO wells (mostly within ±20% of the median count) cannot be trusted at the 50% cell loss of some treatments. The activity call (mAP q < 0.05) comes from notebook 03.
+# We compare patterns, not sizes. A straight line learned from DMSO wells (mostly within ±20% of the median count) is not reliable at the 50% cell loss of some treatments. The activity call (mAP q < 0.05) comes from notebook 03.
 # 
-# **Pass if:** active treatments that did not lose cells have a low likeness (their effect is not density).
+# **Pass if:** the active treatments that did not lose cells have a low likeness, so their effect is not density.
 
 # In[8]:
 
@@ -421,30 +443,39 @@ fig.suptitle("Does the profile change look like a DMSO well with fewer cells? (o
 save_fig(fig, "03_density-likeness-vs-cell-loss")
 
 
-# **Result:** **The 1h and 4h effects are not density; the 24h cell-loss effects are partly density.**
+# **Result: the 1h and 4h effects are not density. The 24h cell-loss effects are partly density.**
 # 
-# - **Check of the method (positive control):** across all 126 treatments, those with fewer cells have a higher likeness, as expected if the density pattern is real.
-# - **Active treatments that lose cells** (12 with < 80% of DMSO cells) all have a positive likeness (0.26–0.72, median 0.45): the 6 cytotoxic calls (CBK600005 and CBK200566 in CL2 at 24h: 0.34–0.53), and CBK600005 and TGFβ1 in CL1 at 24h (0.26–0.72). Part of their profile change is the cell loss, so these profiles should not be read as morphology alone.
-# - **CBK600005 at 1h and 4h** is active in both cell lines without cell loss (89–106% of DMSO) and with a negative likeness (−0.46 to 0.02). This is the clearest effect in the screen that does not come from density.
-# - **TGFβ1 in CL2** at 24h (and 2.5 ng/ml at 4h) has a positive likeness (0.38–0.57) without cell loss. TGFβ1 can make cells spread and scatter, which may change the neighbor and texture features in the same way as lower density; this is a possible explanation, not tested here.
-# - Three treatments in CL1 at 24h lose cells without being active (CBK175924 0.67 and 2 mM, CBK200566 0.2 mM; 49–79% of DMSO) and look most like low density (0.56–0.75).
+# - **Check of the method (positive control):** across all 126 treatments, treatments with fewer cells have a higher likeness. This is what we expect if the density pattern is real.
+# - **Active treatments that lose cells** (12 with < 80% of DMSO cells) all have a positive likeness (0.26–0.72, median 0.45). They are the 6 cytotoxic calls (CBK600005 and CBK200566 in CL2 at 24h, 0.34–0.53), and CBK600005 and TGFβ1 in CL1 at 24h (0.26–0.72).
+# - Part of their profile change is the cell loss. So do not read these profiles as morphology alone.
+# - **CBK600005 at 1h and 4h** is active in both cell lines without cell loss (89–106% of DMSO), and with a negative likeness (−0.46 to 0.02). This is the clearest effect in the screen that does not come from density.
+# - **TGFβ1 in CL2** at 24h (and 2.5 ng/ml at 4h) has a positive likeness (0.38–0.57) without cell loss. TGFβ1 can make cells spread and scatter. This may change the neighbor and texture features in the same way as lower density. This is a possible explanation, not tested here.
+# - Three treatments in CL1 at 24h lose cells without being active: CBK175924 0.67 and 2 mM, and CBK200566 0.2 mM (49–79% of DMSO). They look most like low density (0.56–0.75).
 # - For treatments with almost no profile change, the likeness is mostly noise (not active: −0.75 to 0.80).
-# 
+
 # ## Summary
 # 
-# **What we did:** counted all cells per well, scaled each well to the DMSO median of its plate and cell line, and called a treatment cytotoxic when the median of its 3 wells is at least 3 robust SDs below DMSO. Random sets of 3 DMSO wells check the false-positive rate (at most 0.22% per test). We then compared the profile change of each treatment with the pattern of DMSO wells that have fewer cells.
+# **What we did:**
+# 
+# 1. We counted all cells per well, and scaled each well to the DMSO median of its plate and cell line.
+# 2. We called a treatment cytotoxic when the median of its 3 wells is at least 3 robust SDs below DMSO. Random sets of 3 DMSO wells check the false-positive rate (at most 0.22% per test).
+# 3. We compared the profile change of each treatment with the pattern of DMSO wells that have fewer cells.
 # 
 # **Findings:**
 # 
 # - **Cytotoxic:** CBK600005 and CBK200566 in CL2 at 24h, at all 3 doses (50–71% of DMSO cells). There is no clear dose response: the 0.67 and 2 mM doses give the same loss.
 # - No treatment is cytotoxic at 1h or 4h.
-# - CL1 at 24h: CBK600005, TGFβ1 (5 and 10 ng/ml) and CBK175924 0.67 mM roughly halve the cell count but are not called, because the DMSO wells of this plate vary too much (threshold 33% of DMSO).
+# - CL1 at 24h: CBK600005, TGFβ1 (5 and 10 ng/ml) and CBK175924 0.67 mM roughly halve the cell count. The rule does not call them, because the DMSO wells of this plate vary too much (threshold 33% of DMSO).
 # - The profile changes of the treatments that lose cells look partly like DMSO wells with fewer cells (likeness 0.26–0.72). CBK600005 at 1h and 4h changes the cells without cell loss and without a density-like pattern.
 # 
 # **Caveats:**
 # 
-# - Fewer cells can mean cell death or slower growth; a cell count cannot separate the two.
-# - Compound doses are stock concentrations; final concentrations are unknown.
-# - The likeness compares patterns, not sizes, and is a correlation, not a correction: it shows that part of a profile change may be density, not how much.
+# - Fewer cells can mean cell death or slower growth. A cell count cannot separate the two.
+# - Compound doses are stock concentrations. The final concentrations are unknown.
+# - The likeness compares patterns, not sizes, and is a correlation, not a correction. It shows that part of a profile change may be density, but not how much.
 # 
-# **Outputs:** `tables/04.identify-cytotoxic-perts/cytotoxicity_calls.csv` (one row per treatment, plate and cell line), `dmso_threshold.csv` (DMSO spread and threshold per plate and cell line) and `cell-loss-and-density-likeness.csv` (cell loss, activity and likeness per treatment).
+# **Outputs:**
+# 
+# - `tables/04.identify-cytotoxic-perts/cytotoxicity_calls.csv`: one row per treatment, plate and cell line.
+# - `dmso_threshold.csv`: the DMSO spread and threshold per plate and cell line.
+# - `cell-loss-and-density-likeness.csv`: the cell loss, activity and likeness of each treatment.
